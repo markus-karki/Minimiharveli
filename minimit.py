@@ -2,8 +2,10 @@ import csv
 from scipy.optimize import linprog
 from datetime import date
 from math import cos, sin, acos, pi
+from numpy import zeros, append
+
 # Step 1: Closest approach, with lowest minimums. a) dest+alt b) to
-# import approach data, build optimization problem, print solution, 
+# build optimization problem, print solution, 
 # Step 2: Filter by TAF
 # Step 3: Filter by opening hours
 # Step 4: Filter by night
@@ -15,7 +17,10 @@ class Conditions():
     def __init__(self):
         self.RVR = 0
         self.visibility = 0
-        self.cloubase = 0
+        self.cloudbase = 0
+        self.tempoVisibility = 0
+        self.tempoRVR = 0
+        self.tempoCloudbase = 0
         self.TS = 0
         self.FZ = 0
         self.windDirection = 0
@@ -23,14 +28,20 @@ class Conditions():
 
 class Flight():
     def __init__(self, parameters, arg0, arg1, arg2):
+        taxiTime = 10
+        approachtTime = 10
+        contigengyPercent = 0.05
+        contigengyTime = 12
+        
+        # Calculate and save parameters
         self.date = date.today()
         self.origin = arg0[0:4]
         self.destination = arg1[0:4]
         self.endurance = int(arg2[0:2]) + int(arg2[2:4])/60
-        self.departureTime = int(arg0[4:6]) + (int(arg0[6:8])) / 60
-        self.flightTime = int(arg1[4:6]) + (int(arg1[6:8]) + 10) / 60
+        self.departureTime = int(arg0[4:6]) + (int(arg0[6:8]) + taxiTime) / 60
+        self.flightTime = int(arg1[4:6]) + (int(arg1[6:8]) + approachtTime) / 60
         self.arrivalTime = self.departureTime + self.flightTime
-        self.enduranceLeft = self.endurance - self.flightTime - max(self.flightTime * 0.05, 0.1)
+        self.enduranceLeft = self.endurance - self.flightTime - max(self.flightTime * contigengyPercent, contigengyTime/60)
         self.maxTailwind = parameters['maxTailwind']
         self.maxCrosswind = parameters['maxCrosswind']
         self.minRVR = parameters['minRVR']
@@ -40,27 +51,49 @@ class Flight():
 
 class Airports():
     def __init__(self, AirportDataFile):
-        self.airport = list()
+        # Open csv
         ifile  = open(AirportDataFile)
         read = csv.reader(ifile)
+        
+        # Add airports
+        self.airport = list()
         for row in read :  
             if len(row[0])==4:
                 self.airport.append(Airport(row[0], row[1], row[2]))
         
     def calculateDistanceAndTime(self, flight):
-        for airport in self.airport:
-            if airport.name == flight.destination:
-                destination = airport
-                break
+        # Find destination airport
+        destination = self.getAirport(flight.destination)
         
+        # Calculate distance between each airport and destination
         for airport in self.airport:
             airport.calculateDistanceAndTime(flight, destination)
             
+    def addApproach(self, ApproachDataFile):
+        # Open csv
+        ifile  = open(ApproachDataFile)
+        read = csv.reader(ifile)
+        
+        # Add approaches
+        current_airport = ""
+        for row in read :  
+            if len(row[0]) == 4:
+                if row[0] != current_airport:
+                    current_airport = self.getAirport(row[0])         
+                current_airport.addApproach(row)
+    
     def readNOTAM(self, NOTAM_url):
         pass
 
     def readTAF(self, TAF_url):
         pass
+
+    def getAirport(self, name):
+        for airport in self.airport:
+            if airport.name == name:
+                destination = airport
+                break
+        return destination
     
 class Airport():
     def __init__(self, name, latitude, longitude):
@@ -76,16 +109,25 @@ class Airport():
         self.arrivalTime = 0.0
         self.extraFuel = 0.0 
         self.oneHourExtra = 0
+        self.conditionHours = [14, 15]
+        self.conditions = [0, 0]
     
     def calculateDistanceAndTime(self, flight, origin):
         if self.name == origin.name:
             self.distanceFromDest = 0
         else:
             self.distanceFromDest = 3440 * acos(sin(self.latitude)*sin(origin.latitude)+cos(self.latitude)*cos(origin.latitude)*cos(self.longitude-origin.longitude))
-        self.timeFromDest = self.distanceFromDest / flight.XCSpeed + 12/60
+        
+        sidAndApproach = 12
+        finalReserves = 30
+
+        self.timeFromDest = self.distanceFromDest / flight.XCSpeed + sidAndApproach/60
         self.arrivalTime = flight.arrivalTime + self.timeFromDest
-        self.extraFuel = flight.enduranceLeft - self.timeFromDest - 0.5
+        self.extraFuel = flight.enduranceLeft - self.timeFromDest - finalReserves/60
         self.oneHourExtra = (self.extraFuel > 1)
+
+    def addApproach(self, row):
+        self.approach.append(Approach(row))
 
     def addOpeninghours(self):
         pass
@@ -94,13 +136,20 @@ class Airport():
         pass
 
 class Approach():
-    def __init__(self):
-        self.ID = "ILS RWY30"
-        self.CAT1 = 1
-        self.NPA = 0
-        self.circle = 0
-        self.groudEquipment = 0
-        self.rwyheading = 298 
+    def __init__(self, row):
+        self.ID = row[1]
+        self.groudEquipment = int(row[2])
+        self.CAT1 = int(row[3])
+        self.NPA = int(row[4])
+        self.circle = int(row[5])
+        self.rwyheading = int(row[6]) 
+        self.cloudbase = int(row[7]) 
+        if int(row[9]) == 0:
+            self.RVR = int(row[8]) 
+            self.visibility = int(9999) 
+        else:
+            self.visibility = int(row[8])
+            self.RVR = int(9999)
 
 class TAFparser():
     def __init__(self):
@@ -111,35 +160,39 @@ class METARparser():
         pass
 
 class Solver():
-    def __init__(self, airports, parameters, arg0, arg1, arg2):
-        self.parameters = parameters
-        self.c = 0
-        self.approach = 0
-        self.A_ub  = 0
-        self.b_ub = 0
-        self.A_eq = 0
-        self.b_eq = 0
-        self.bounds = 0
-        self.TOAirport = arg0[0:4]
-        self.LDGAirport = arg1[0:4]
-        self.TOtime = arg0[4:8]
-        self.LDGtime = arg1[4:8]
-        self.holdOK = arg2
-
-
-        #for airport in airports.airport:
-            #for approach in airport.approach:
-                #self.addApproach(airport, approach)
-
+    def __init__(self, airports, flight):
+        # Initialize variables
+        self.c = zeros((1,0))
+        self.approach = list()
+        self.type = list()
+        self.A_ub  = zeros((1,0))
+        self.b_ub = zeros((1,0))
+        self.A_eq = zeros((1,0))
+        self.b_eq = zeros((1,0))
+        self.bounds = zeros((1,0))
+        
+        # Add feasible approaches 
+        for airport in airports.airport:
+            for approach in airport.approach:
+                self.addDestOps(airport, approach, flight)
+                self.addDestPlan(airport, approach, flight)
+                self.addAlt1Ops(airport, approach, flight)
+                self.addAlt1Plan(airport, approach, flight)
+                self.addAlt2Ops(airport, approach, flight)
+                self.addAlt2Plan(airport, approach, flight)
 
     def solve(self):
         pass
         #self.solution = linprog(c, A_ub, b_ub, A_eq, b_eq, bounds)
 
-    def addApproach(self, airport, approach):
-        pass
-        # Objective
+    def addDestOps(self, airport, approach, flight):
         
+        self.approach.append(approach)
+        self.type.append("DestOps")
+
+        # Objective
+        append(self.c, (approach.RVR + approach.visibility + approach.cloudbase))
+
         #TO Alt Ops airport exists
         #Dest Ops airport exists
         #Alt I Ops airport exists
@@ -182,12 +235,21 @@ class Solver():
 
         #Bounds
         
-        #Approach
-
+    def addDestPlan(self, airport, approach, flight):
+        pass
+        
+    def addAlt1Ops(self, airport, approach, flight):
+        pass
+    def addAlt1Plan(self, airport, approach, flight):
+        pass
+    def addAlt2Ops(self, airport, approach, flight):
+        pass
+    def addAlt2Plan(self, airport, approach, flight):
+        pass
     def printSolution(self):
         print('\n')
         print('TO: EFPO')
-        print('Plan:', 'ILS RWY 30 ', '800m / -ft')
+        #print('Plan:', 'ILS RWY 30 ', '800m / -ft')
         print('Ops: ', 'ILS RWY 30 ', '800m / -ft')
         print('\n')
         print('DEST: EFTU')
@@ -209,6 +271,7 @@ def main(ApproachDataFile, AirportDataFile, NOTAM_url, TAF_url, parameters, arg0
     # Read airport data 
     airports = Airports(AirportDataFile)
     airports.calculateDistanceAndTime(flight)
+
     # Read approach data 
     airports.addApproach(ApproachDataFile)
 
@@ -223,7 +286,7 @@ def main(ApproachDataFile, AirportDataFile, NOTAM_url, TAF_url, parameters, arg0
     # Read METAR data
 
     # Build input 
-    solver = Solver(airports, parameters, arg0, arg1, arg2)
+    solver = Solver(airports, flight)
 
     # Optimize
     solver.solve()
