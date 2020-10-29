@@ -1,46 +1,28 @@
-Class 
-
-
 Class Solution():
   def __init__(self, solver):
-    self.Dest = '-'
-    self.Alt1 = '-'
-    self.Alt2 = '-'
-    self.DestOps = '-'
-    self.DestPlan = '-'
-    self.Alt1Ops = '-'
-    self.Alt1Plan = '-'
-    self.Alt2Ops = '-'
-    self.Alt2Plan = '-'
-    self.DestOpsValues = '-'
-    self.DestPlanValues = '-'
-    self.Alt1OpsValues = '-'
-    self.Alt1PlanValues = '-'
-    self.Alt2OpsValues = '-'
-    self.Alt2PlanValues = '-'
-    
     activeApproaches = where(solver.solution['x'] == 1)
+    
     for i in activeApproach:
       type = solver.type[i]
-      if  type == 'DestOps':
-        self.Dest = solver.???
-        self.DestOps = solver.approach[i].name
-        self.DestOps = solver.approach[i].RVR
-        
-      eif type == 'DestPlan':
+      approach = solver.approach[i]
+      setattr(self, type, approach)
       
-      eif type == 'Alt1Ops':
-      
-      eif type == 'Alt1Plan':
-      
-      eif type == 'Alt2Ops':
-      
-      eif type == 'Alt2Plan':
-      
- 
- def print(self):
+    self.print('DEST', self.DestOps, self.DestPlan)
+    self.print('Alt1', self.Alt1Ops, self.Alt1Plan)
+    self.print('Alt2', self.alt2Ops, self.Alt2Plan)
+  
+  def print(self, title, ops, plan):
+    print('\n')
+    print(title, ': ', ops.airportName)
+    if plan.CAT1 == 1:
+      cloudbase = '-'
+    else:
+      cloudbase = plan.cloudbase
+    print('Plan:', plan.name, ' ', plan.RVR, 'm / ', cloudbase, 'ft')
+    print('Ops: ', ops.name, ' ', ops.RVR, 'm / -ft')
     
-    values = {}
+
+   
     
     
       
