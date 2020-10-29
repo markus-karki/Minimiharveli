@@ -9,7 +9,7 @@ Class Solution():
       
     self.print('DEST', self.DestOps, self.DestPlan)
     self.print('Alt1', self.Alt1Ops, self.Alt1Plan)
-    self.print('Alt2', self.alt2Ops, self.Alt2Plan)
+    self.print('Alt2', self.Alt2Ops, self.Alt2Plan)
   
   def print(self, title, ops, plan):
     print('\n')
