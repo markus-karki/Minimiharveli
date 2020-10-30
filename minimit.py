@@ -2,7 +2,7 @@ import csv
 from scipy.optimize import linprog
 from datetime import date
 from math import cos, sin, acos, pi
-from numpy import zeros, append
+from numpy import zeros, append, where, nditer
 
 # Step 1: w44
 #   .1 Closest approach, with lowest minimums.  dest+alt 
@@ -12,8 +12,6 @@ from numpy import zeros, append
 # Step 4: Filter by night w47
 # Step 5: Filter by metar w48
 # Step 6: Publish as web or commandline app w49
-
-# Check minimum contigency
 
 class Conditions():
     def __init__(self):
@@ -139,6 +137,7 @@ class Airport():
 
 class Approach():
     def __init__(self, row):
+        self.airportName = row[0]
         self.ID = row[1]
         self.groudEquipment = int(row[2])
         self.CAT1 = int(row[3])
@@ -167,6 +166,10 @@ class TAFparser():
         pass
 
 class METARparser():
+    def __init__(self):
+        pass
+
+class NOTAMparser():
     def __init__(self):
         pass
 
@@ -377,6 +380,30 @@ class Solver():
         print('Plan:', 'VOR RWY 30 ', '11000m / 454ft')
         print('Ops: ', 'ILS RWY 30 ', '600m / - ft')
         
+class Solution():
+  def __init__(self, solver):
+    activeApproach = where(abs(solver.solution['x'] - 1)<0.05)
+    
+    for i in nditer(activeApproach):
+      type = solver.type[i]
+      approach = solver.approach[i]
+      setattr(self, type, approach)
+      
+    self.print('DEST', self.DestOps, self.DestPlan)
+    self.print('Alt1', self.Alt1Ops, self.Alt1Plan)
+    if hasattr(self, 'Alt2Ops'):
+        self.print('Alt2', self.Alt2Ops, self.Alt2Plan)
+  
+  def print(self, title, ops, plan):
+    print('\n')
+    print(title, ': ', ops.airportName)
+    if plan.CAT1 == 1:
+      cloudbase = '-'
+    else:
+      cloudbase = plan.cloudbase
+    print('Plan:', plan.ID, ' ', plan.RVR, 'm / ', cloudbase, 'ft')
+    print('Ops: ', ops.ID, ' ', ops.RVR, 'm / -ft')
+
 def main(ApproachDataFile, AirportDataFile, NOTAM_url, TAF_url, parameters, arg0, arg1, arg2):
     # Read parameters
     flight = Flight(parameters, arg0, arg1, arg2)
@@ -405,7 +432,7 @@ def main(ApproachDataFile, AirportDataFile, NOTAM_url, TAF_url, parameters, arg0
     solver.solve()
 
     # Print solution
-    solver.printSolution()
+    Solution(solver)
 
 
 if __name__ == '__main__':
