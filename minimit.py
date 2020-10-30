@@ -5,7 +5,7 @@ from math import cos, sin, acos, pi
 from numpy import zeros, append, where, nditer
 
 # Step 1: w44
-#   .1 Closest approach, with lowest minimums.  dest+alt 
+#   .1 Closest approach, with lowest minimums.  dest+alt , done
 #   .2 Include TO
 # Step 2: Filter by TAF w45
 # Step 3: Filter by opening hours w46
@@ -181,168 +181,193 @@ class Solver():
         self.type = list()
         self.A_ub  = zeros((17,0))
         self.b_ub = zeros((17,1))
-        self.A_eq = zeros((4,0))
-        self.b_eq = zeros((4,1))
+        self.A_eq = zeros((5,0))
+        self.b_eq = zeros((5,1))
         self.bounds = (0, 1)
         
         self.b_ub[1:5] = -1
         self.b_ub[16] = -1
 
         self.b_eq[0] = 1
+        self.b_eq[4] = 1
         
         # Add feasible approaches 
         for airport in airports.airport:
-            for approach in airport.approach:
-                self.A_ub = append(self.A_ub, zeros((17,6)), axis=1)
-                self.A_eq = append(self.A_eq, zeros((4,6)), axis=1)
-                
-                self.addDestOps(airport, approach, flight)
-                self.addDestPlan(airport, approach, flight)
-                self.addAlt1Ops(airport, approach, flight)
-                self.addAlt1Plan(airport, approach, flight)
-                self.addAlt2Ops(airport, approach, flight)
-                self.addAlt2Plan(airport, approach, flight)
+            if airport.extraFuel > 0:
+                for approach in airport.approach:
+                    if airport.name == flight.destination:
+                        self.addDestOps(airport, approach, flight)
+                        self.addDestPlan(airport, approach, flight)
+                    else:
+                        self.addAlt1Ops(airport, approach, flight)
+                        self.addAlt1Plan(airport, approach, flight)
+                        self.addAlt2Ops(airport, approach, flight)
+                        self.addAlt2Plan(airport, approach, flight)
 
     def solve(self):
-        self.solution = linprog(self.c, self.A_ub, self.b_ub, self.A_eq, self.b_eq, self.bounds)
+        if len(self.c) == 0:
+            print('No suitable alternates found')
+        else:
+            # Solve
+            self.solution = linprog(self.c, self.A_ub, self.b_ub, self.A_eq, self.b_eq, self.bounds, options={'tol': 1e-6})
+            if self.solution.status != 0:
+                print('No suitable alternates found')
+            else:
+                # Print solution
+                Solution(self)      
 
     def addDestOps(self, airport, approach, flight):
         # Append list of added approaches and their types
         self.approach.append(approach)
         self.type.append("DestOps")
-
+        self.A_ub = append(self.A_ub, zeros((17,1)), axis=1)
+        self.A_eq = append(self.A_eq, zeros((5,1)), axis=1)
+        
         # Append objective
         self.c = append(self.c, (approach.RVR + approach.visibility + approach.cloudbase) / 500)
         
-        # Constraint 0 
-        self.A_ub[0,-6] = airport.distanceFromDest
+        # Constraint 0: DestOPS is at destination
+        self.A_ub[0,-1] = airport.distanceFromDest
 
         # Constraint 4
-        self.A_ub[4,-6] = - approach.wxDestOps
+        self.A_ub[4,-1] = - approach.wxDestOps
 
         # Constraint 15
-        self.A_ub[15,-6] = - approach.groudEquipment
+        self.A_ub[15,-1] = - approach.groudEquipment
+
+        # EQ Constraint 5
+        self.A_eq[4,-1] = 1
         
     def addDestPlan(self, airport, approach, flight):
         # Append list of added approaches and their types
         self.approach.append(approach)
         self.type.append("DestPlan")
+        self.A_ub = append(self.A_ub, zeros((17,1)), axis=1)
+        self.A_eq = append(self.A_eq, zeros((5,1)), axis=1)
 
         # Append objective
         self.c = append(self.c, (approach.RVR + approach.visibility + approach.cloudbase) / 500)
         
         # Constraint 2 
-        self.A_ub[2,-5] = - approach.wxDestPlan
+        self.A_ub[2,-1] = - approach.wxDestPlan
 
         # Constraint 3
-        self.A_ub[3,-5] = - approach.wxDestPlan
+        self.A_ub[3,-1] = - approach.wxDestPlan
 
         # Eq Constraint 1
-        self.A_eq[1,-5] = airport.distanceFromDest
+        self.A_eq[1,-1] = airport.distanceFromDest
 
     def addAlt1Ops(self, airport, approach, flight):
         # Append list of added approaches and their types
         self.approach.append(approach)
         self.type.append("Alt1Ops")
+        self.A_ub = append(self.A_ub, zeros((17,1)), axis=1)
+        self.A_eq = append(self.A_eq, zeros((5,1)), axis=1)
 
         # Append objective
         self.c = append(self.c, (approach.RVR + approach.visibility + approach.cloudbase) / 500 + airport.distanceFromDest)
         
-        # Constraint 1
-        self.A_ub[1,-4] = - airport.distanceFromDest
+        # Constraint 1: Alt1Ops at least one mile from destination
+        self.A_ub[1,-1] = - airport.distanceFromDest
 
         # Constraint 5
-        self.A_ub[5,-4] = 1
+        self.A_ub[5,-1] = 1
 
         # Constraint 6
-        self.A_ub[6,-4] = 1 - approach.wxAlt1Ops
+        self.A_ub[6,-1] = 1 - approach.wxAlt1Ops
 
         # Constraint 9
-        self.A_ub[9,-4] = approach.CAT1
+        self.A_ub[9,-1] = max(approach.CAT1, approach.NPA)
 
         # Constraint 10
-        self.A_ub[10,-4] = approach.NPA
+        self.A_ub[10,-1] = approach.NPA
 
         # Constraint 11
-        self.A_ub[11,-4] = approach.circle
+        self.A_ub[11,-1] = approach.circle
 
         # Constraint 15
-        self.A_ub[15,-4] = 1 - approach.groudEquipment
+        self.A_ub[15,-1] = 1 - approach.groudEquipment
 
         # Constraint 16
-        self.A_ub[16,-4] = - airport.distanceFromDest
+        self.A_ub[16,-1] = - airport.distanceFromDest
 
         # Eq Constraint 0
-        self.A_eq[0,-4] = 1
+        self.A_eq[0,-1] = 1
 
         # Eq Constraint 2
-        self.A_eq[2,-4] = - airport.distanceFromDest
+        self.A_eq[2,-1] = - airport.distanceFromDest
 
     def addAlt1Plan(self, airport, approach, flight):
         # Append list of added approaches and their types
         self.approach.append(approach)
         self.type.append("Alt1Plan")
+        self.A_ub = append(self.A_ub, zeros((17,1)), axis=1)
+        self.A_eq = append(self.A_eq, zeros((5,1)), axis=1)
 
         # Append objective
         self.c = append(self.c, (approach.RVR + approach.visibility + approach.cloudbase) / 500)
     
         # Constraint 5
-        self.A_ub[5,-3] = - approach.wxAlt1Plan
+        self.A_ub[5,-1] = - approach.wxAlt1Plan
 
         # Constraint 9
-        self.A_ub[9,-3] = - max(approach.NPA, approach.circle)
+        self.A_ub[9,-1] = - max(approach.NPA, approach.circle)
 
         # Constraint 10
-        self.A_ub[10,-3] = - approach.wxAlt1Plan * approach.wxAlt1Worse
+        self.A_ub[10,-1] = - approach.wxAlt1Plan * approach.wxAlt1Worse * approach.NPA
 
         # Constraint 11
-        self.A_ub[11,-3] = - approach.circle
+        self.A_ub[11,-1] = - approach.circle
 
         # Eq Constraint 2
-        self.A_eq[2,-3] = airport.distanceFromDest
+        self.A_eq[2,-1] = airport.distanceFromDest
 
     def addAlt2Ops(self, airport, approach, flight):
         # Append list of added approaches and their types
         self.approach.append(approach)
         self.type.append("Alt2Ops")
+        self.A_ub = append(self.A_ub, zeros((17,1)), axis=1)
+        self.A_eq = append(self.A_eq, zeros((5,1)), axis=1)
 
         # Append objective
         self.c = append(self.c, (approach.RVR + approach.visibility + approach.cloudbase) / 500 + airport.distanceFromDest)
         
-        # Constraint 2
-        self.A_ub[1,-2] = - airport.distanceFromDest
+        # Constraint 2: Alt1Ops at least one mile from destination, if DestPlan in not OK
+        self.A_ub[1,-1] = - airport.distanceFromDest
 
         # Constraint 3
-        self.A_ub[3,-2] = - 1
+        self.A_ub[3,-1] = - 1
 
         # Constraint 4
-        self.A_ub[4,-2] = - 1
+        self.A_ub[4,-1] = - 1
 
         # Constraint 7
-        self.A_ub[7,-2] = 1
+        self.A_ub[7,-1] = 1
 
         # Constraint 8
-        self.A_ub[8,-2] = 1 - approach.wxAlt2Ops
+        self.A_ub[8,-1] = 1 - approach.wxAlt2Ops
 
         # Constraint 12
-        self.A_ub[12,-2] = approach.CAT1
+        self.A_ub[12, -1] = approach.CAT1
 
         # Constraint 13
-        self.A_ub[13,-2] = approach.NPA
+        self.A_ub[13,-1] = approach.NPA
 
         # Constraint 14
-        self.A_ub[14,-2] = approach.circle
+        self.A_ub[14,-1] = approach.circle
 
         # Constraint 16
-        self.A_ub[16,-2] = airport.distanceFromDest
+        self.A_ub[16,-1] = airport.distanceFromDest
 
         # Eq Constraint 3
-        self.A_eq[3,-2] = - airport.distanceFromDest
+        self.A_eq[3,-1] = - airport.distanceFromDest
 
     def addAlt2Plan(self, airport, approach, flight):
         # Append list of added approaches and their types
         self.approach.append(approach)
         self.type.append("Alt2Plan")
+        self.A_ub = append(self.A_ub, zeros((17,1)), axis=1)
+        self.A_eq = append(self.A_eq, zeros((5,1)), axis=1)
 
         # Append objective
         self.c = append(self.c, (approach.RVR + approach.visibility + approach.cloudbase) / 500)
@@ -354,7 +379,7 @@ class Solver():
         self.A_ub[12,-1] = - max(approach.NPA, approach.circle)
 
         # Constraint 13
-        self.A_ub[13,-1] = - approach.wxAlt2Plan * approach.wxAlt2Worse
+        self.A_ub[13,-1] = - approach.wxAlt2Plan * approach.wxAlt2Worse * approach.NPA
 
         # Constraint 14
         self.A_ub[14,-1] = - approach.circle
@@ -401,8 +426,8 @@ class Solution():
       cloudbase = '-'
     else:
       cloudbase = plan.cloudbase
-    print('Plan:', plan.ID, ' ', plan.RVR, 'm / ', cloudbase, 'ft')
-    print('Ops: ', ops.ID, ' ', ops.RVR, 'm / -ft')
+    print('Plan:', plan.ID, ' ', plan.RVR, 'm /', cloudbase, 'ft')
+    print('Ops: ', ops.ID, ' ', ops.RVR, 'm / - ft')
 
 def main(ApproachDataFile, AirportDataFile, NOTAM_url, TAF_url, parameters, arg0, arg1, arg2):
     # Read parameters
@@ -428,12 +453,8 @@ def main(ApproachDataFile, AirportDataFile, NOTAM_url, TAF_url, parameters, arg0
     # Build input 
     solver = Solver(airports, flight)
 
-    # Optimize
+    # Optimize and print solution
     solver.solve()
-
-    # Print solution
-    Solution(solver)
-
 
 if __name__ == '__main__':
     TAF_url = 'https://api.met.no/weatherapi/tafmetar/1.0/taf.txt?icao='
@@ -443,8 +464,8 @@ if __name__ == '__main__':
     AirportDataFile = 'AirportData.csv'
     parameters = {'maxTailwind': 10, 'maxCrosswind': 20, 'minRVR': 600, 'TOALTminRVR': 800, 'OEIXCSpeed': 120, 'XCSpeed': 140}
     AirportsInUse = 0
-    arg0 = "EFPO1230"
-    arg1 = "EFTU0045"
-    arg2 = "0245"
+    arg0 = "EFPO2330"
+    arg1 = "EFOU0145"
+    arg2 = "0100"
 
     main(ApproachDataFile, AirportDataFile, NOTAM_url, TAF_url, parameters, arg0, arg1, arg2)
