@@ -6,8 +6,8 @@ from numpy import zeros, append, where, nditer
 
 # Step 1: w44
 #   .1 Closest approach, with lowest minimums.  dest+alt , done
-#   .2 Include TO
-# Step 2: Filter by TAF w45
+#   .2 Include TO, w45
+# Step 2: Filter by TAF w45    
 # Step 3: Filter by opening hours w46
 # Step 4: Filter by night w47
 # Step 5: Filter by metar w48
@@ -465,7 +465,7 @@ if __name__ == '__main__':
     parameters = {'maxTailwind': 10, 'maxCrosswind': 20, 'minRVR': 600, 'TOALTminRVR': 800, 'OEIXCSpeed': 120, 'XCSpeed': 140}
     AirportsInUse = 0
     arg0 = "EFPO2330"
-    arg1 = "EFOU0145"
-    arg2 = "0100"
+    arg1 = "EFPO0045"
+    arg2 = "0230"
 
     main(ApproachDataFile, AirportDataFile, NOTAM_url, TAF_url, parameters, arg0, arg1, arg2)
