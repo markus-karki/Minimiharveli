@@ -3,15 +3,28 @@ from scipy.optimize import linprog
 from datetime import date
 from math import cos, sin, acos, pi
 from numpy import zeros, append, where, nditer
+from html.parser import HTMLParser
+from urllib.request import urlopen
 
 # Step 1: w44
 #   .1 Closest approach, with lowest minimums.  dest+alt , done
-#   .2 Include TO, w45
-# Step 2: Filter by TAF w45    
+#   .2 Include TOALT and TO, w45
+# Step 2: Filter by TAF w45 
+#   .1 Read TAF, done
+#   .2 Filter by TAF   
 # Step 3: Filter by opening hours w46
-# Step 4: Filter by night w47
+#   .1 Read NOTAM, done
+#   .2 Filter by opening hours
+# (Step 4: Filter by night w47
+#   .1 Calculate night
+#   .2 Filter by night)
 # Step 5: Filter by metar w48
-# Step 6: Publish as web or commandline app w49
+#   .1 Read METAR, done
+#   .2 Filter by METAR
+# Redesign optimization to loop-search 
+# Step 7: Publish as web or commandline app w49
+
+# Rewrite solution class
 
 class Conditions():
     def __init__(self):
@@ -42,6 +55,7 @@ class Flight():
         self.flightTime = int(arg1[4:6]) + (int(arg1[6:8]) + approachtTime) / 60
         self.arrivalTime = self.departureTime + self.flightTime
         self.enduranceLeft = self.endurance - self.flightTime - max(self.flightTime * contigengyPercent, contigengyTime/60)
+        
         self.maxTailwind = parameters['maxTailwind']
         self.maxCrosswind = parameters['maxCrosswind']
         self.minRVR = parameters['minRVR']
@@ -83,12 +97,53 @@ class Airports():
                 current_airport.addApproach(row)
     
     def readNOTAM(self, NOTAM_url):
-        pass
+        #Import HTML from a URL
+        url = urlopen(NOTAM_url)
+        html = url.read().decode('latin1')
+        url.close()
 
-    def readTAF(self, TAF_url):
-        pass
+        p = NOTAMparser()
+        p.feed(html)
+
+        print_all = 0
+        currentNOTAM = ''
+        for row in p.dataList:    
+            if (row[0:2] == 'EF') and len(row)>7:
+                    if (row[5] == '-'):
+                        current_airport = self.getAirport(row[0:4])
+                        if current_airport != 'None':
+                            current_airport.NOTAM = ''
+            if 'OPR HR' in row:
+                print_all = 1
+
+            if 'FROM' in row:
+                print_all = 0
+                if current_airport != 'None':
+                    current_airport.NOTAM = current_airport.NOTAM + currentNOTAM 
+                currentNOTAM = ''
+            if ('TWR CLSD' in row) or ('AFIS CLSD' in row):
+                print_all = 1
+            if print_all:
+                currentNOTAM = currentNOTAM + row
+
+    def readAvinorData(self, baseUrl, data):
+        # Get data from Avinor
+        url = baseUrl
+        for airport in self.airport:
+            url = url + airport.name + ","
+        
+        file = urlopen(url)
+        new_line = '\n'
+        for line in file:
+            old_line = new_line
+            new_line = line.decode("utf-8")
+            if (old_line[0:4] != new_line[0:4]) and (old_line != '\n'):
+                airport = self.getAirport(old_line[0:4])
+                setattr(airport,data,old_line)
+
 
     def getAirport(self, name):
+        destination = 'None'
         for airport in self.airport:
             if airport.name == name:
                 destination = airport
@@ -100,17 +155,20 @@ class Airport():
         self.name = name
         self.latitude = float(latitude) / 360 * 2 * pi
         self.longitude = float(longitude) / 360 * 2 * pi
-        self.TAF = 'NIL'
-        #self.METAR = 0
-        self.openingHours = 0
+        self.TAF = 'NA'
+        self.METAR = 'NA'
+        self.NOTAM = 'NA'
+
         self.approach = list() 
+        
+        self.isOpen = 0
         self.distanceFromDest = 0.0
         self.timeFromDest = 0.0 
         self.arrivalTime = 0.0
         self.extraFuel = 0.0 
         self.oneHourExtra = 0
-        self.conditionHours = [14, 15]
-        self.conditions = [0, 0]
+        #self.conditionHours = [14, 15]
+        self.conditions = 0 #[0, 0]
     
     def calculateDistanceAndTime(self, flight, origin):
         if self.name == origin.name:
@@ -119,7 +177,7 @@ class Airport():
             self.distanceFromDest = 3440 * acos(sin(self.latitude)*sin(origin.latitude)+cos(self.latitude)*cos(origin.latitude)*cos(self.longitude-origin.longitude))
         
         sidAndApproach = 12
-        finalReserves = 30
+        finalReserves = 45
 
         self.timeFromDest = self.distanceFromDest / flight.XCSpeed + sidAndApproach/60
         self.arrivalTime = flight.arrivalTime + self.timeFromDest
@@ -161,17 +219,16 @@ class Approach():
         self.wxAlt1Worse = 1
         self.wxAlt2Worse = 1
 
-class TAFparser():
+class NOTAMparser(HTMLParser):
     def __init__(self):
-        pass
-
-class METARparser():
-    def __init__(self):
-        pass
-
-class NOTAMparser():
-    def __init__(self):
-        pass
+    #Since Python 3, we need to call the __init__() function of the parent class
+        super().__init__()
+        self.reset()
+        self.dataList = list()
+    #Defining what the method should output when called by HTMLParser.
+    def handle_data(self, data):
+        # Only parse the 'anchor' tag.
+        self.dataList.append(data)
 
 class Solver():
     def __init__(self, airports, flight):
@@ -415,6 +472,7 @@ class Solution():
       setattr(self, type, approach)
       
     self.print('DEST', self.DestOps, self.DestPlan)
+    # TODO: Worsening?
     self.print('Alt1', self.Alt1Ops, self.Alt1Plan)
     if hasattr(self, 'Alt2Ops'):
         self.print('Alt2', self.Alt2Ops, self.Alt2Plan)
@@ -435,24 +493,34 @@ def main(ApproachDataFile, AirportDataFile, NOTAM_url, TAF_url, parameters, arg0
 
     # Read airport data 
     airports = Airports(AirportDataFile)
-    airports.calculateDistanceAndTime(flight)
-
+    
     # Read approach data 
     airports.addApproach(ApproachDataFile)
-
+    
     # Read NOTAM opening hours for next 24h
-    #airports.readNOTAM(NOTAM_url)
+    airports.readNOTAM(NOTAM_url)
 
     # Read day and night data for next 24h
     
     # Read TAF data
-    #airports.readTAF(TAF_url)
+    #airports.readAvinorData(TAF_url, 'TAF')
 
     # Read METAR data
+    #airports.readAvinorData(METAR_url, 'METAR')
 
+    # Solve Takeoff alternates
+    # Calculate alternate distances and fuel requirements
+    #airports.calculateDistanceAndTime(flight)
+    # Build input 
+    #solver = Solver(airports, flight)
+    # Optimize and print solution
+    #solver.solve()
+
+    # Solve destination and alternates    
+    # Calculate alternate distances and fuel requirements
+    airports.calculateDistanceAndTime(flight)
     # Build input 
     solver = Solver(airports, flight)
-
     # Optimize and print solution
     solver.solve()
 
