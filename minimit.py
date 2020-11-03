@@ -28,16 +28,16 @@ from urllib.request import urlopen
 
 class Conditions():
     def __init__(self):
-        self.RVR = 0
-        self.visibility = 0
+        self.lateralVisibility = 0
         self.cloudbase = 0
-        self.tempoVisibility = 0
-        self.tempoRVR = 0
+        self.tempoLateralVisibility = 0
         self.tempoCloudbase = 0
         self.TS = 0
         self.FZ = 0
         self.windDirection = 0
         self.windSpeed = 0
+        self.ATCopen = 0
+        self.isNight = 0
 
 class Flight():
     def __init__(self, parameters, arg0, arg1, arg2):
@@ -125,6 +125,9 @@ class Airports():
                 print_all = 1
             if print_all:
                 currentNOTAM = currentNOTAM + row
+        
+        for airport in self.airport:
+            airport.NOTAMtoConditions()
 
     def readAvinorData(self, baseUrl, data):
         # Get data from Avinor
@@ -140,7 +143,9 @@ class Airports():
             if (old_line[0:4] != new_line[0:4]) and (old_line != '\n'):
                 airport = self.getAirport(old_line[0:4])
                 setattr(airport,data,old_line)
-
+        
+        for airport in self.airport:
+            airport.TAFtoConditions()
 
     def getAirport(self, name):
         destination = 'None'
@@ -187,10 +192,62 @@ class Airport():
     def addApproach(self, row):
         self.approach.append(Approach(row))
 
-    def addOpeninghours(self):
-        pass
+    def NOTAMtoConditions(self):
+        months = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"]
+        weekdays = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]
+        NOTAM = self.NOTAM.split()
+        for group in NOTAM:
+            if group[0:3] in months:
+                pass
+                #Format: MONTH DAY - MONTH DAY
+                #Format: MONTH DAY - DAY
+                #Format: MONTH DAY
+            elif group[0:3] in weekdays:
+                pass
+                #Format: DAY - DAY
+                #Format: DAY
+            elif group[4] == '-':
+                pass
+                #Format: HHMM - HHMM
 
-    def addTAF(self):
+    def TAFtoConditions(self):
+        TAF = self.TAF.split()
+        for group in TAF:
+            if group[0:2] == 'KT':
+                pass
+            elif (len(group) == 4) and group.isdigit():
+                pass
+            elif group[0:3] == 'OVC':
+                pass
+            elif group[0:3] == 'BKN':
+                pass
+            elif group[0:2] == 'VV':
+                pass
+            elif group == 'TEMPO':
+                pass
+            elif group[0:4] == 'PROB':
+                pass
+            elif group[0:5] == 'BECMG':
+                pass
+            elif group[0:2] == 'FM':
+                pass
+            elif group[0:2] == 'TL':
+                pass
+            elif group[0:2] == 'AT':
+                pass
+            elif group[0:5] == 'CAVOK':
+                pass
+            elif group[0:3] == 'SKC':
+                pass
+            elif group[0:3] == 'NSC':
+                pass
+            elif 'FZ' in group:
+                pass
+            elif group[4] == '/':
+                pass
+
+class Runway():
+    def __init__(self, name, direction):
         pass
 
 class Approach():
