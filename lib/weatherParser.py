@@ -23,7 +23,7 @@ class WeatherData():
     def createCsv(self, fileName):
         f = open(fileName, 'w')
         self.writer = csv.writer(f)
-        self.writer.writerow(['Airport', 'Start', 'End', 'Data', 'Type', 'Value'])
+        self.writer.writerow(['Airport', 'Start', 'End', 'Data', 'Value', 'Type'])
         self.readData()
         f.close()
 
@@ -43,8 +43,8 @@ class WeatherData():
                 self.data2lines(old_line, airport)
                 # setattr(airport,data,old_line)
 
-    def writeLine(self, airport, startTime, endTime, dataType, data, value):
-        self.writer.writerow([airport, int(startTime), int(endTime), data, dataType, value])
+    def writeLine(self, airport, startTime, endTime, datatype, data, value):
+        self.writer.writerow([airport, int(startTime), int(endTime), data, value, datatype])
 
 class TafData(WeatherData):
     def __init__(self, url, AirportDataFile):
@@ -64,6 +64,8 @@ class TafData(WeatherData):
                 self.writeLine(airport, startTime, endTime, groupType, 'Visibility', int(group))
             elif group[0:3] == 'OVC' or group[0:3] == 'BKN':
                 self.writeLine(airport, startTime, endTime, groupType, 'Cloudbase', int(group[3:6]) * 100)
+            elif group[0:3] == 'SCT' or group[0:3] == 'FEW':
+                self.writeLine(airport, startTime, endTime, groupType, 'Cloudbase',  5000)
             elif group[0:2] == 'VV':
                 self.writeLine(airport, startTime, endTime, groupType, 'Cloudbase', int(group[2:5]) * 100)
             elif group == 'TEMPO': 
@@ -130,6 +132,7 @@ class MetarData(WeatherData):
                     startTime = datetime(year, month, int(group[0:2])).timestamp() + int(group[2:4]) * 3600 + int(group[4:6]) * 60
                     endTime = startTime + 3600
 
+'''
 dof = date.today()
 TAF_url = 'https://api.met.no/weatherapi/tafmetar/1.0/taf.txt?icao='
 METAR_url = 'https://api.met.no/weatherapi/tafmetar/1.0/metar.txt?icao='
@@ -137,5 +140,6 @@ TafDataFile = 'TafData.csv'
 AirportDataFile = 'AirportData.csv'
 MetarDataFile = 'MetarData.csv'
 
-#TafData(TAF_url, AirportDataFile).createCsv(TafDataFile)
+TafData(TAF_url, AirportDataFile).createCsv(TafDataFile)
 MetarData(METAR_url, AirportDataFile).createCsv(MetarDataFile)
+'''
