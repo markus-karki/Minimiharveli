@@ -117,6 +117,8 @@ class MetarData(WeatherData):
                 self.writeLine(airport, startTime, endTime, groupType, 'Visibility', int(group))
             elif group[0:3] == 'OVC' or group[0:3] == 'BKN':
                 self.writeLine(airport, startTime, endTime, groupType, 'Cloudbase', int(group[3:6]) * 100)
+            elif group[0:3] == 'SCT' or group[0:3] == 'FEW':
+                self.writeLine(airport, startTime, endTime, groupType, 'Cloudbase', 5000)
             elif group[0:2] == 'VV':
                 self.writeLine(airport, startTime, endTime, groupType, 'Cloudbase', int(group[2:5]) * 100)
             elif group[0:5] == 'CAVOK' or group[0:3] == 'SKC' or group[0:3] == 'NSC':

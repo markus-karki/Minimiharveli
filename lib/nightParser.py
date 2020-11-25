@@ -12,7 +12,7 @@ class TwilightData():
 
     def addAirports(self):
         # Open csv
-        ifile  = open(AirportDataFile)
+        ifile  = open(self.AirportDataFile)
         read = csv.reader(ifile)
         
         # Add airports
@@ -23,8 +23,8 @@ class TwilightData():
                 lon = row[2] 
                 url = self.url + '&lat=' + str(lat) + '&lng=' + str(lon) + '&date=' + str(self.dof.year) + '-' + str(self.dof.month) + '-' + str(self.dof.day)
                 data = requests.get(url).json()
-                dayStart = data['results']['civil_twilight_end']
-                dayEnd = data['results']['civil_twilight_begin']
+                dayStart = data['results']['civil_twilight_begin']
+                dayEnd = data['results']['civil_twilight_end']
                 self.writeLine(airport, dayStart, dayEnd)
         
         ifile.close()
@@ -42,9 +42,11 @@ class TwilightData():
     def str2datetime(self, str):
         return int(datetime(int(str[0:4]), int(str[5:7]), int(str[8:10]),int(str[11:13]), int(str[14:16])).timestamp())
 
+'''
 AirportDataFile = 'AirportData.csv'
 night_url = 'http://api.sunrise-sunset.org/json?formatted=0'
 
 dof = date.today()
 CivilTwilightDataFile = 'CivilTwilightData.csv'
 TwilightData(dof, night_url, AirportDataFile).createCsv(CivilTwilightDataFile)
+'''

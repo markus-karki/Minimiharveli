@@ -1,67 +1,177 @@
-import csv
-from scipy.optimize import linprog
-from datetime import date
+from datetime import datetime, time, date
 from math import cos, sin, acos, pi
 from numpy import zeros, append, where, nditer
-from html.parser import HTMLParser
-from urllib.request import urlopen
-
-# Step 1: w44
-#   .1 Closest approach, with lowest minimums.  dest+alt , done
-#   .2 Include TOALT and TO, w45
-# Step 2: Filter by TAF w45 
-#   .1 Read TAF, done
-#   .2 Filter by TAF   
-# Step 3: Filter by opening hours w46
-#   .1 Read NOTAM, done
-#   .2 Filter by opening hours
-# (Step 4: Filter by night w47
-#   .1 Calculate night
-#   .2 Filter by night)
-# Step 5: Filter by metar w48
-#   .1 Read METAR, done
-#   .2 Filter by METAR
-# Redesign optimization to loop-search 
-# Step 7: Publish as web or commandline app w49
-
-# Rewrite solution class
+import csv
+import os
+from lib.nightParser import *
+from lib.notamParser import *
+from lib.weatherParser import *
+'''
+TODO
+- Step 1: Redesign optimization to loop-search, w48, to test
+- Step 2: Update approach data
+- Step 3: Merge to master branch
+- Step 7: Publish as flask app via AWS
+- Step 8: Code improvements: 
+    - Commemts
+    - Variable names
+    - Function names
+    - Error handling
+    - Multiple argument passing practices
+    - Hard coded parameters
+    - Flag printing
+    - Manual ALT assigment
+    - Check logic for design/performance improvements
+    - BECMG for FZ and TS groups
+'''
 
 class Conditions():
-    def __init__(self):
-        self.lateralVisibility = 0
-        self.cloudbase = 0
-        self.tempoLateralVisibility = 0
-        self.tempoCloudbase = 0
-        self.TS = 0
-        self.FZ = 0
-        self.windDirection = 0
-        self.windSpeed = 0
-        self.ATCopen = 0
-        self.isNight = 0
+    def __init__(self, row):
+        self.start = int(row[1])
+        self.end = int(row[2])
+        self.data = row[3]
+        
+        if len(row) >= 6:
+            self.type = row[5]
+        
+    def isValidAnyMoment(self, times):
+        if times[0] > self.end or times[1] < self.start:
+            return 0
+        else:
+            return 1
+            
+    def isValidAllTheTime(self, times):
+        if times[1] < self.start or times[0] > self.end:
+            return 0
+        else:
+            return 1
+
+    def hasPassed(self, times):
+        if times[0] > self.end:
+            return 1
+        else:
+            return 0
+
+class ScalarCondition(Conditions):
+    def __init__(self, row):
+        super().__init__(row)
+        self.value = row[4]
+
+    def isFeasible(self, limit, value):
+        if int(value) > int(limit):
+            return True
+        else:
+            return False
+
+class BooleanCondition(Conditions):
+    def __init__(self, row):
+        super().__init__(row)
+
+    def isFeasible(self, limit, value):
+        return True
+
+class WindCondition(Conditions):
+    def __init__(self, row):
+        super().__init__(row)
+        self.value = row[4]
+
+    def isFeasible(self, limit, value):
+        tailLimit = limit[0]
+        xLimit = limit[1]
+        runwayHeading  = limit[2]
+        if value[0:3] == 'VRB':
+            if int(value[3:5]) < tailLimit:
+                return True
+            else:
+                return False
+        else:
+            xrossWind =  sin((runwayHeading - int(value[0:3]))/180*pi) * int(value[3:5])
+            tailWind = -1 * cos((runwayHeading - int(value[0:3]))/180*pi) * int(value[3:5])
+            if xrossWind < xLimit and tailWind < tailLimit: 
+                return True
+            else:
+                return False
 
 class Flight():
-    def __init__(self, parameters, arg0, arg1, arg2):
-        taxiTime = 10
-        approachtTime = 10
-        contigengyPercent = 0.05
-        contigengyTime = 12
+    def __init__(self, airports, parameters, arg0, arg1, arg2):
+        for p in parameters:
+            setattr(self, p, parameters[p])
+
+        currentTime = datetime.now()
         
-        # Calculate and save parameters
-        self.date = date.today()
-        self.origin = arg0[0:4]
-        self.destination = arg1[0:4]
-        self.endurance = int(arg2[0:2]) + int(arg2[2:4])/60
-        self.departureTime = int(arg0[4:6]) + (int(arg0[6:8]) + taxiTime) / 60
-        self.flightTime = int(arg1[4:6]) + (int(arg1[6:8]) + approachtTime) / 60
-        self.arrivalTime = self.departureTime + self.flightTime
-        self.enduranceLeft = self.endurance - self.flightTime - max(self.flightTime * contigengyPercent, contigengyTime/60)
+        departureTimeValue = int(arg0[4:6]) * 3600 + int(arg0[6:8]) * 60 + self.taxiTime
+        self.departureTime =  datetime(currentTime.year, currentTime.month, currentTime.day).timestamp() + departureTimeValue
+        if departureTimeValue < (currentTime.hour * 3600 + currentTime.minute * 60):
+            self.departureTime = self.departureTime + 24*60*60
         
-        self.maxTailwind = parameters['maxTailwind']
-        self.maxCrosswind = parameters['maxCrosswind']
-        self.minRVR = parameters['minRVR']
-        self.TOALTminRVR = parameters['TOALTminRVR']
-        self.OEIXCSpeed = parameters['OEIXCSpeed']
-        self.XCSpeed = parameters['XCSpeed']
+        self.arrivalTime = self.departureTime + int(arg1[4:6]) * 3600 + int(arg1[6:8]) * 60 + self.approachTime
+
+        self.departureAirport = airports.getAirport(arg0[0:4])
+        self.destinationAirport = airports.getAirport(arg1[0:4])
+        
+        if len(arg2) >= 4:
+            self.alternateAirport = airports.getAirport(arg2[0:4])
+        else:
+            self.alternateAirport = None
+        
+        if len(arg2) == 8:
+            self.alternateArrivalTime = self.arrivalTime + int(arg2[4:6]) * 3600 + int(arg2[6:8]) * 60 + self.approachTime
+        else:
+            self.alternateArrivalTime = None
+        
+        self.departure = 0
+        self.toAlt = 0
+        self.destination = 0
+        self.alt1 = 0
+        self.alt2 = 0
+
+    def solve(self, airports):
+        # TO
+        self.departure = Operation(self.departureAirport, self.departureTime)  
+        self.departure.toMinimumsWithoutAlt(self)      
+        if not(self.departure.feasibleAP):
+            print('Departure airport not feasible!')
+            #self.departure.printTO('Take-off')
+        elif not(self.departure.feasibleWx):
+            self.departure.toMinimumsWithAlt(self) # 400m if CLL, 500m otherwise
+            if not(self.departure.feasibleWx):
+                print('Weather not suitable for departure!')
+            self.departure.printTO('Take-off')
+            
+            self.toAlt = airports.findToAlt(self)
+            if self.toAlt == 0:
+                print('No suitable takeoff alternate found!')
+            else:
+                self.toAlt.print('Take-off alternate')
+        else:
+            self.departure.printTO('Take-off')
+
+        # DEST
+        self.destination = Operation(self.destinationAirport, self.arrivalTime) 
+        
+        self.destination.destMinimums(self)
+        if not(self.destination.feasibleAP):
+            print('Destination airport not feasible!')
+        self.destination.print('Destination')
+        destName = self.destination.airport.name
+        # ALT1
+        self.alt1 = airports.findAlt(self, not(self.destination.opsMinimums.approach.groundEquipment), (destName,))
+        if self.alt1 == 0:
+            print('No suitable alternate found!')
+        else:
+            self.alt1.print('Alternate 1')
+        
+        # ALT2
+        if not(self.destination.feasibleWx):
+            if self.alt1 == 0:
+                alt1Name = ''
+            else:
+                alt1Name = self.alt1.airport.name
+            self.alt2 = airports.findAlt(self, 0, (alt1Name, destName))
+            if self.alt2 == 0:
+                print('No suitable 2nd alternate found!')
+            else:
+                self.alt2.print('Alternate 2')
 
 class Airports():
     def __init__(self, AirportDataFile):
@@ -74,15 +184,20 @@ class Airports():
         for row in read :  
             if len(row[0])==4:
                 self.airport.append(Airport(row[0], row[1], row[2]))
-        
-    def calculateDistanceAndTime(self, flight):
-        # Find destination airport
-        destination = self.getAirport(flight.destination)
-        
-        # Calculate distance between each airport and destination
-        for airport in self.airport:
-            airport.calculateDistanceAndTime(flight, destination)
             
+    def addRunway(self, RunwayDataFile):
+        # Open csv
+        ifile  = open(RunwayDataFile)
+        read = csv.reader(ifile)
+        
+        # Add runway
+        current_airport = ""
+        for row in read:  
+            if len(row[0]) == 4:
+                if row[0] != current_airport:
+                    current_airport = self.getAirport(row[0])         
+                current_airport.addRunway(row)
+
     def addApproach(self, ApproachDataFile):
         # Open csv
         ifile  = open(ApproachDataFile)
@@ -96,56 +211,18 @@ class Airports():
                     current_airport = self.getAirport(row[0])         
                 current_airport.addApproach(row)
     
-    def readNOTAM(self, NOTAM_url):
-        #Import HTML from a URL
-        url = urlopen(NOTAM_url)
-        html = url.read().decode('latin1')
-        url.close()
-
-        p = NOTAMparser()
-        p.feed(html)
-
-        print_all = 0
-        currentNOTAM = ''
-        for row in p.dataList:    
-            if (row[0:2] == 'EF') and len(row)>7:
-                    if (row[5] == '-'):
-                        current_airport = self.getAirport(row[0:4])
-                        if current_airport != 'None':
-                            current_airport.NOTAM = ''
-            if 'OPR HR' in row:
-                print_all = 1
-
-            if 'FROM' in row:
-                print_all = 0
-                if current_airport != 'None':
-                    current_airport.NOTAM = current_airport.NOTAM + currentNOTAM 
-                currentNOTAM = ''
-            if ('TWR CLSD' in row) or ('AFIS CLSD' in row):
-                print_all = 1
-            if print_all:
-                currentNOTAM = currentNOTAM + row
+    def addData(self, dataFile):
+        # Open csv
+        ifile  = open(dataFile)
+        read = csv.reader(ifile)
         
-        for airport in self.airport:
-            airport.NOTAMtoConditions()
-
-    def readAvinorData(self, baseUrl, data):
-        # Get data from Avinor
-        url = baseUrl
-        for airport in self.airport:
-            url = url + airport.name + ","
-        
-        file = urlopen(url)
-        new_line = '\n'
-        for line in file:
-            old_line = new_line
-            new_line = line.decode("utf-8")
-            if (old_line[0:4] != new_line[0:4]) and (old_line != '\n'):
-                airport = self.getAirport(old_line[0:4])
-                setattr(airport,data,old_line)
-        
-        for airport in self.airport:
-            airport.TAFtoConditions()
+        # Add runway
+        current_airport = ''
+        for row in read:  
+            if len(row[0]) == 4:
+                if row[0] != current_airport:
+                    current_airport = self.getAirport(row[0])         
+                current_airport.addData(row)
 
     def getAirport(self, name):
         destination = 'None'
@@ -155,442 +232,454 @@ class Airports():
                 break
         return destination
     
+    def findToAlt(self, flight):
+        # Find first slot, where ats is open (+-30') (max delay 1h)
+        # Find first slot, where wx is feasible (+-1h) (max delay 1h)
+        bestArrivalTime = flight.arrivalTime + 48*3600
+        bestToAlt = 0
+
+        for airport in self.airport:
+            arrivalTime = airport.getFlightTime(flight, flight.departureAirport, flight.OEIXCSpeed)
+            if arrivalTime < bestArrivalTime:
+                alt = Operation(airport, arrivalTime)
+                if alt.feasibleAP and alt.feasibleAts:
+                    alt.toAltMinimums(flight)
+                    if alt.planMinimums != 0:
+                        bestAlt = alt
+                        bestArrivalTime = arrivalTime
+                
+        return bestToAlt
+
+    def findAlt(self, flight, groundEq, noGo = None):
+        # Find first slot, where ats is open (+-30') (max delay 1h)
+        # Find first slot, where wx is feasible (+-1h) (max delay 1h)
+        bestArrivalTime = flight.arrivalTime + 48*3600
+        bestAlt = 0
+
+        if flight.alternateAirport is None:
+            airport_list = self.airport
+        else:
+            airport_list = (flight.alternateAirport,)
+
+        for airport in airport_list:
+            if not(airport.name in noGo):
+                if flight.alternateArrivalTime is None:
+                    arrivalTime = flight.arrivalTime + airport.getFlightTime(flight, flight.destinationAirport, flight.XCSpeed)
+                else:
+                    arrivalTime = flight.alternateArrivalTime
+                if arrivalTime < bestArrivalTime:
+                    alt = Operation(airport, arrivalTime)
+                    if alt.feasibleAP and alt.feasibleAts:
+                        alt.altMinimums(flight, groundEq)
+                        if alt.planMinimums != 0:
+                            bestAlt = alt
+                            bestArrivalTime = arrivalTime
+
+                
+        return bestAlt
+
 class Airport():
     def __init__(self, name, latitude, longitude):
         self.name = name
         self.latitude = float(latitude) / 360 * 2 * pi
         self.longitude = float(longitude) / 360 * 2 * pi
-        self.TAF = 'NA'
-        self.METAR = 'NA'
-        self.NOTAM = 'NA'
 
-        self.approach = list() 
-        
-        self.isOpen = 0
-        self.distanceFromDest = 0.0
-        self.timeFromDest = 0.0 
-        self.arrivalTime = 0.0
-        self.extraFuel = 0.0 
-        self.oneHourExtra = 0
-        #self.conditionHours = [14, 15]
-        self.conditions = 0 #[0, 0]
-    
-    def calculateDistanceAndTime(self, flight, origin):
+        self.runway = list() 
+        #self.conditions = list()
+
+        self.wind = list()
+        self.day = list()
+        self.ats = list()
+        self.visibility = list()
+        self.cloudbase = list()
+        self.wx = list()
+ 
+    def getFlightTime(self, flight, origin, speed):
         if self.name == origin.name:
             self.distanceFromDest = 0
         else:
             self.distanceFromDest = 3440 * acos(sin(self.latitude)*sin(origin.latitude)+cos(self.latitude)*cos(origin.latitude)*cos(self.longitude-origin.longitude))
-        
-        sidAndApproach = 12
-        finalReserves = 45
 
-        self.timeFromDest = self.distanceFromDest / flight.XCSpeed + sidAndApproach/60
-        self.arrivalTime = flight.arrivalTime + self.timeFromDest
-        self.extraFuel = flight.enduranceLeft - self.timeFromDest - finalReserves/60
-        self.oneHourExtra = (self.extraFuel > 1)
+        timeFromDest = (self.distanceFromDest / speed) * 3600 + flight.sidTime + flight.approachTime
+        return timeFromDest
+
+    def addRunway(self, row):
+        self.runway.append(Runway(row))
+
+    def addApproach(self, row):
+        # Add approaches
+        for runway in self.runway:  
+            if runway.name == row[1]:
+                runway.addApproach(row)
+
+    def addData(self, row):
+        if row[3] == 'atsOpen':
+            self.ats.append(BooleanCondition(row))
+        elif row[3] == 'Day':
+            self.day.append(BooleanCondition(row))
+        elif row[3] == 'Wind':
+            self.wind.append(WindCondition(row))
+        elif row[3] == 'Visibility':
+            self.visibility.append(ScalarCondition(row))
+        elif row[3] == 'Cloudbase':
+            self.cloudbase.append(ScalarCondition(row))
+        else:
+            self.wx.append(BooleanCondition(row))
+
+    def getMinimums(self, requirements, preferences, times):
+        '''
+        Returns Minimums object
+        '''
+        bestMinimums = Minimums()
+        for runway in self.runway:
+            if self.feasibleWind(runway, times):
+                for approach in runway.approach:
+                    visibility_type = approach.visibility[0]
+                    visibility_value = int(approach.visibility[1:])
+                    if ('NPA' in requirements) and approach.type != 'NPA':
+                        continue
+
+                    if ('CIRCLE' in requirements) and approach.type != 'CIRCLE':
+                        continue
+
+                    if ('groundEq' in requirements) and approach.groundEquipment == 0:
+                        continue
+                    
+                    if ('worseMinimums' in requirements):
+                        min_visibility = visibility_type + str(visibility_value + 1000)
+                        min_cloudbase = str(int(approach.cloudbase) + 200)
+                        cMinimums = Minimums(approach, min_visibility,  min_cloudbase)
+                    elif ('feasibleVisibilityOEI' in requirements):
+                        min_visibility = visibility_type + str(max(visibility_value, 800))
+                        cMinimums = Minimums(approach, min_visibility, approach.cloudbase)
+                    else:
+                        if runway.RCLL and runway.RTZL:
+                            min_visibility = approach.visibility
+                        else:
+                            min_visibility = visibility_type + str(max(visibility_value, 600))
+
+                        cMinimums = Minimums(approach, min_visibility, approach.cloudbase)
+                    
+                    self.feasibleVisibility(cMinimums, times, runway)
+                    self.feasibleCloudbase(cMinimums, times)
+
+
+                    if ('feasibleVis' in requirements) and not(cMinimums.feasibleVisibility):
+                        continue
+            
+                    if ('feasibleCloudbase' in requirements) and not(cMinimums.feasibleCloudbase):
+                        continue
+
+                    if ('feasibleVisibilityOEI' in requirements) and not(cMinimums.feasibleVisibility):
+                        continue
+
+                    if bestMinimums.approach == '':
+                        bestMinimums = cMinimums
+                    elif ('feasibleVis' in preferences) and cMinimums.feasibleVisibility and not(bestMinimums.feasibleVisibility):
+                        bestMinimums = cMinimums
+                    elif ('feasibleCloudbase' in preferences) and cMinimums.feasibleCloudbase and not(bestMinimums.feasibleCloudbase):
+                        bestMinimums = cMinimums
+                    elif ('Type' in preferences) and cMinimums.hasHigherCat(bestMinimums):
+                        bestMinimums = cMinimums
+                    elif ('OpsMin' in preferences) and (int(cMinimums.visibility[1:]) < int(bestMinimums.visibility[1:])):
+                        bestMinimums = cMinimums
+        return bestMinimums
+
+    def getToMinimums(self, times):
+        '''
+        Returns Minimums object
+        '''
+        # Check iff cll, in feasible runway
+        minimums = Minimums()
+        
+        for runway in self.runway:
+            if self.feasibleWind(runway, times):
+                if runway.RCLL:
+                    visibility = 'R400'
+                elif self.isDay(times):
+                    visibility = 'R500'
+                else:
+                    visibility = 'R500'
+                
+                if int(visibility[1:]) < int(minimums.visibility[1:]):
+                    minimums.visibility = visibility
+                    best_runway = runway
+
+        self.feasibleVisibility(minimums, times, best_runway)
+        self.feasibleCloudbase(minimums, times)
+        
+        return minimums
+
+    def feasibleVisibility(self, minimums, times, runway):
+        # Take account converted visibility in minimums of approach
+        visibility_type = minimums.visibility[0]
+        visibility_value = int(minimums.visibility[1:])
+        
+        if visibility_type == 'R':
+            if visibility_value >= 800:
+                if self.isNight(times):
+                    if runway.HIALS:
+                        visibility_value = visibility_value / 2
+                    else:
+                        visibility_value = visibility_value / 1.5
+                else:
+                    if runway.HIALS:
+                        visibility_value = visibility_value / 1.5
+
+        # if high intensity lights (installed, ats open)
+        value = self.feasibleCondition('visibility', visibility_value, times)
+        minimums.setFeasibleVisibility(value) 
+
+    def feasibleCloudbase(self, minimums, times):
+        value = self.feasibleCondition('cloudbase', minimums.cloudbase, times)
+        minimums.setFeasibleCloudbase(value)
+
+    def feasibleCondition(self, attr, limit, times):    
+        if len(getattr(self, attr)) <= 1 and attr != 'wx':
+            return 0
+        
+        for cond in getattr(self, attr): 
+            # Check if condition is relevant by type
+            if cond.type == 'PROB' and cond.type == 'PROB TEMPO':
+                continue
+            elif cond.type == 'TEMPO':
+                if cond.isValidAnyMoment(times):
+                    if not(cond.isFeasible(limit, cond.value)):
+                        print('HOX: TEMPO group')
+            elif cond.type == 'BECMG':
+                if cond.hasPassed(times):
+                    value = cond.value
+                elif cond.isValidAnyMoment(times):
+                    if not(cond.isFeasible(limit, value)):
+                        return False
+                    value = cond.value
+                    if not(cond.isFeasible(limit, value)):
+                        return False
+            else:
+                if cond.isValidAnyMoment(times):
+                    value = cond.value
+                    if not(cond.isFeasible(limit, value)):
+                        return False
+                    
+        return True
+
+    def feasibleWx(self, times):
+        return self.feasibleCondition('wx', False, times) 
+    
+    def feasibleWind(self, runway, times):
+        limit = (10, 20, runway.heading)
+        return self.feasibleCondition('wind', limit, times) 
+    
+    def isDay(self, times):
+        for cond in self.day: 
+            if cond.isValidAllTheTime(times):
+                return True
+        return False
+
+    def isNight(self, times):
+        for cond in self.day: 
+            if cond.isValidAllTheTime(times):
+                return True
+        return False
+
+    def atsOpen(self, times):
+        for cond in self.ats: 
+            if cond.isValidAllTheTime(times):
+                return True
+        return False
+
+class Runway():
+    def __init__(self, row):
+        self.name = row[1]
+        self.heading = int(row[2])
+        self.RTZL = int(row[3])
+        self.RCLL = int(row[4])
+        self.HIALS = int(row[5])
+        self.REDL = int(row[6])
+        self.CL_MARK = int(row[7])
+        self.approach = list()
 
     def addApproach(self, row):
         self.approach.append(Approach(row))
 
-    def NOTAMtoConditions(self):
-        months = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"]
-        weekdays = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]
-        NOTAM = self.NOTAM.split()
-        for group in NOTAM:
-            if group[0:3] in months:
-                pass
-                #Format: MONTH DAY - MONTH DAY
-                #Format: MONTH DAY - DAY
-                #Format: MONTH DAY
-            elif group[0:3] in weekdays:
-                pass
-                #Format: DAY - DAY
-                #Format: DAY
-            elif group[4] == '-':
-                pass
-                #Format: HHMM - HHMM
-
-    def TAFtoConditions(self):
-        TAF = self.TAF.split()
-        for group in TAF:
-            if group[0:2] == 'KT':
-                pass
-            elif (len(group) == 4) and group.isdigit():
-                pass
-            elif group[0:3] == 'OVC':
-                pass
-            elif group[0:3] == 'BKN':
-                pass
-            elif group[0:2] == 'VV':
-                pass
-            elif group == 'TEMPO':
-                pass
-            elif group[0:4] == 'PROB':
-                pass
-            elif group[0:5] == 'BECMG':
-                pass
-            elif group[0:2] == 'FM':
-                pass
-            elif group[0:2] == 'TL':
-                pass
-            elif group[0:2] == 'AT':
-                pass
-            elif group[0:5] == 'CAVOK':
-                pass
-            elif group[0:3] == 'SKC':
-                pass
-            elif group[0:3] == 'NSC':
-                pass
-            elif 'FZ' in group:
-                pass
-            elif group[4] == '/':
-                pass
-
-class Runway():
-    def __init__(self, name, direction):
-        pass
-
 class Approach():
     def __init__(self, row):
-        self.airportName = row[0]
-        self.ID = row[1]
-        self.groudEquipment = int(row[2])
-        self.CAT1 = int(row[3])
-        self.NPA = int(row[4])
-        self.circle = int(row[5])
-        self.rwyheading = int(row[6]) 
-        self.cloudbase = int(row[7]) 
-        if int(row[9]) == 0:
-            self.RVR = int(row[8]) 
-            self.visibility = int(9999) 
-        else:
-            self.visibility = int(row[8])
-            self.RVR = int(9999)
-        
-        self.wxDestOps = 1
-        self.wxDestPlan = 1
-        self.wxAlt1Plan = 1
-        self.wxAlt1Ops = 1
-        self.wxAlt2Plan = 1
-        self.wxAlt2Ops = 1
-        self.wxAlt1Worse = 1
-        self.wxAlt2Worse = 1
+        self.ID = row[2]
+        self.groundEquipment = int(row[3])
+        self.type = row[4]
+        self.cloudbase = row[5]
+        self.visibility = row[6]
 
-class NOTAMparser(HTMLParser):
-    def __init__(self):
-    #Since Python 3, we need to call the __init__() function of the parent class
-        super().__init__()
-        self.reset()
-        self.dataList = list()
-    #Defining what the method should output when called by HTMLParser.
-    def handle_data(self, data):
-        # Only parse the 'anchor' tag.
-        self.dataList.append(data)
+class Minimums():
+    def __init__(self, approach = '', visibility = 'V9999', cloudbase = 5000):
+        self.approach = approach
+        self.visibility = visibility
+        self.cloudbase = cloudbase
 
-class Solver():
-    def __init__(self, airports, flight):
-        # Initialize variables
-        self.c = zeros(0)
-        self.approach = list()
-        self.type = list()
-        self.A_ub  = zeros((17,0))
-        self.b_ub = zeros((17,1))
-        self.A_eq = zeros((5,0))
-        self.b_eq = zeros((5,1))
-        self.bounds = (0, 1)
-        
-        self.b_ub[1:5] = -1
-        self.b_ub[16] = -1
-
-        self.b_eq[0] = 1
-        self.b_eq[4] = 1
-        
-        # Add feasible approaches 
-        for airport in airports.airport:
-            if airport.extraFuel > 0:
-                for approach in airport.approach:
-                    if airport.name == flight.destination:
-                        self.addDestOps(airport, approach, flight)
-                        self.addDestPlan(airport, approach, flight)
-                    else:
-                        self.addAlt1Ops(airport, approach, flight)
-                        self.addAlt1Plan(airport, approach, flight)
-                        self.addAlt2Ops(airport, approach, flight)
-                        self.addAlt2Plan(airport, approach, flight)
-
-    def solve(self):
-        if len(self.c) == 0:
-            print('No suitable alternates found')
-        else:
-            # Solve
-            self.solution = linprog(self.c, self.A_ub, self.b_ub, self.A_eq, self.b_eq, self.bounds, options={'tol': 1e-6})
-            if self.solution.status != 0:
-                print('No suitable alternates found')
-            else:
-                # Print solution
-                Solution(self)      
-
-    def addDestOps(self, airport, approach, flight):
-        # Append list of added approaches and their types
-        self.approach.append(approach)
-        self.type.append("DestOps")
-        self.A_ub = append(self.A_ub, zeros((17,1)), axis=1)
-        self.A_eq = append(self.A_eq, zeros((5,1)), axis=1)
-        
-        # Append objective
-        self.c = append(self.c, (approach.RVR + approach.visibility + approach.cloudbase) / 500)
-        
-        # Constraint 0: DestOPS is at destination
-        self.A_ub[0,-1] = airport.distanceFromDest
-
-        # Constraint 4
-        self.A_ub[4,-1] = - approach.wxDestOps
-
-        # Constraint 15
-        self.A_ub[15,-1] = - approach.groudEquipment
-
-        # EQ Constraint 5
-        self.A_eq[4,-1] = 1
-        
-    def addDestPlan(self, airport, approach, flight):
-        # Append list of added approaches and their types
-        self.approach.append(approach)
-        self.type.append("DestPlan")
-        self.A_ub = append(self.A_ub, zeros((17,1)), axis=1)
-        self.A_eq = append(self.A_eq, zeros((5,1)), axis=1)
-
-        # Append objective
-        self.c = append(self.c, (approach.RVR + approach.visibility + approach.cloudbase) / 500)
-        
-        # Constraint 2 
-        self.A_ub[2,-1] = - approach.wxDestPlan
-
-        # Constraint 3
-        self.A_ub[3,-1] = - approach.wxDestPlan
-
-        # Eq Constraint 1
-        self.A_eq[1,-1] = airport.distanceFromDest
-
-    def addAlt1Ops(self, airport, approach, flight):
-        # Append list of added approaches and their types
-        self.approach.append(approach)
-        self.type.append("Alt1Ops")
-        self.A_ub = append(self.A_ub, zeros((17,1)), axis=1)
-        self.A_eq = append(self.A_eq, zeros((5,1)), axis=1)
-
-        # Append objective
-        self.c = append(self.c, (approach.RVR + approach.visibility + approach.cloudbase) / 500 + airport.distanceFromDest)
-        
-        # Constraint 1: Alt1Ops at least one mile from destination
-        self.A_ub[1,-1] = - airport.distanceFromDest
-
-        # Constraint 5
-        self.A_ub[5,-1] = 1
-
-        # Constraint 6
-        self.A_ub[6,-1] = 1 - approach.wxAlt1Ops
-
-        # Constraint 9
-        self.A_ub[9,-1] = max(approach.CAT1, approach.NPA)
-
-        # Constraint 10
-        self.A_ub[10,-1] = approach.NPA
-
-        # Constraint 11
-        self.A_ub[11,-1] = approach.circle
-
-        # Constraint 15
-        self.A_ub[15,-1] = 1 - approach.groudEquipment
-
-        # Constraint 16
-        self.A_ub[16,-1] = - airport.distanceFromDest
-
-        # Eq Constraint 0
-        self.A_eq[0,-1] = 1
-
-        # Eq Constraint 2
-        self.A_eq[2,-1] = - airport.distanceFromDest
-
-    def addAlt1Plan(self, airport, approach, flight):
-        # Append list of added approaches and their types
-        self.approach.append(approach)
-        self.type.append("Alt1Plan")
-        self.A_ub = append(self.A_ub, zeros((17,1)), axis=1)
-        self.A_eq = append(self.A_eq, zeros((5,1)), axis=1)
-
-        # Append objective
-        self.c = append(self.c, (approach.RVR + approach.visibility + approach.cloudbase) / 500)
+        self.feasibleVisibility = 0
+        self.feasibleCloudbase = 0
     
-        # Constraint 5
-        self.A_ub[5,-1] = - approach.wxAlt1Plan
+    def plan2ops(self):
+        minimums = self
+        if self.approach.type == 'CAT1':
+            minimums.cloudbase = 0
+        return minimums
 
-        # Constraint 9
-        self.A_ub[9,-1] = - max(approach.NPA, approach.circle)
+    def hasHigherCat(self, anotherMinimums):
+        if self.approach.type == 'CAT1' and anotherMinimums.approach.type != 'CAT1':
+            return 1
+        elif self.approach.type == 'NPA' and anotherMinimums.approach.type == 'CIRCLE':
+            return 1
+        else:
+            return 0
 
-        # Constraint 10
-        self.A_ub[10,-1] = - approach.wxAlt1Plan * approach.wxAlt1Worse * approach.NPA
+    def setFeasibleVisibility(self, value):
+        self.feasibleVisibility = value
 
-        # Constraint 11
-        self.A_ub[11,-1] = - approach.circle
+    def setFeasibleCloudbase(self, value):
+        self.feasibleCloudbase = value
 
-        # Eq Constraint 2
-        self.A_eq[2,-1] = airport.distanceFromDest
-
-    def addAlt2Ops(self, airport, approach, flight):
-        # Append list of added approaches and their types
-        self.approach.append(approach)
-        self.type.append("Alt2Ops")
-        self.A_ub = append(self.A_ub, zeros((17,1)), axis=1)
-        self.A_eq = append(self.A_eq, zeros((5,1)), axis=1)
-
-        # Append objective
-        self.c = append(self.c, (approach.RVR + approach.visibility + approach.cloudbase) / 500 + airport.distanceFromDest)
+class Operation():
+    def __init__(self, airport, time):
+        self.airport = airport
+        self.time = time
         
-        # Constraint 2: Alt1Ops at least one mile from destination, if DestPlan in not OK
-        self.A_ub[1,-1] = - airport.distanceFromDest
-
-        # Constraint 3
-        self.A_ub[3,-1] = - 1
-
-        # Constraint 4
-        self.A_ub[4,-1] = - 1
-
-        # Constraint 7
-        self.A_ub[7,-1] = 1
-
-        # Constraint 8
-        self.A_ub[8,-1] = 1 - approach.wxAlt2Ops
-
-        # Constraint 12
-        self.A_ub[12, -1] = approach.CAT1
-
-        # Constraint 13
-        self.A_ub[13,-1] = approach.NPA
-
-        # Constraint 14
-        self.A_ub[14,-1] = approach.circle
-
-        # Constraint 16
-        self.A_ub[16,-1] = airport.distanceFromDest
-
-        # Eq Constraint 3
-        self.A_eq[3,-1] = - airport.distanceFromDest
-
-    def addAlt2Plan(self, airport, approach, flight):
-        # Append list of added approaches and their types
-        self.approach.append(approach)
-        self.type.append("Alt2Plan")
-        self.A_ub = append(self.A_ub, zeros((17,1)), axis=1)
-        self.A_eq = append(self.A_eq, zeros((5,1)), axis=1)
-
-        # Append objective
-        self.c = append(self.c, (approach.RVR + approach.visibility + approach.cloudbase) / 500)
-
-        # Constraint 7
-        self.A_ub[7,-1] = - approach.wxAlt2Plan
-
-        # Constraint 12
-        self.A_ub[12,-1] = - max(approach.NPA, approach.circle)
-
-        # Constraint 13
-        self.A_ub[13,-1] = - approach.wxAlt2Plan * approach.wxAlt2Worse * approach.NPA
-
-        # Constraint 14
-        self.A_ub[14,-1] = - approach.circle
-
-        # Eq Constraint 3
-        self.A_eq[3,-1] = airport.distanceFromDest
-
-    def printSolution(self):
-        print('\n')
-        print('TO: EFPO')
-        #print('Plan:', 'ILS RWY 30 ', '800m / -ft')
-        print('Ops: ', 'ILS RWY 30 ', '800m / -ft')
-        print('\n')
-        print('DEST: EFTU')
-        print('Plan:', 'ILS RWY 30 ', '600m / -ft')
-        print('Ops: ', 'ILS RWY 30 ', '600m / -ft')
-        print('\n')
-        print('ALT1: EFTP')
-        print('Plan:', 'LNAV/VNAV RWY 06 ', '750m / 384ft')
-        print('Ops: ', 'ILS RWY 24 ', '600m / - ft')
-        print('\n')
-        print('ALT2: EFPO')
-        print('Plan:', 'VOR RWY 30 ', '11000m / 454ft')
-        print('Ops: ', 'ILS RWY 30 ', '600m / - ft')
+        self.isDay = airport.isDay([self.time, self.time + 1800])
+        self.feasibleAts = airport.atsOpen([self.time, self.time + 1800])
+        self.feasibleAP = self.isDay or self.feasibleAts
+        self.feasibleWx = False
         
-class Solution():
-  def __init__(self, solver):
-    activeApproach = where(abs(solver.solution['x'] - 1)<0.05)
-    
-    for i in nditer(activeApproach):
-      type = solver.type[i]
-      approach = solver.approach[i]
-      setattr(self, type, approach)
-      
-    self.print('DEST', self.DestOps, self.DestPlan)
-    # TODO: Worsening?
-    self.print('Alt1', self.Alt1Ops, self.Alt1Plan)
-    if hasattr(self, 'Alt2Ops'):
-        self.print('Alt2', self.Alt2Ops, self.Alt2Plan)
-  
-  def print(self, title, ops, plan):
-    print('\n')
-    print(title, ': ', ops.airportName)
-    if plan.CAT1 == 1:
-      cloudbase = '-'
-    else:
-      cloudbase = plan.cloudbase
-    print('Plan:', plan.ID, ' ', plan.RVR, 'm /', cloudbase, 'ft')
-    print('Ops: ', ops.ID, ' ', ops.RVR, 'm / - ft')
+        self.opsMinimums = 0
+        self.planMinimums = 0
 
-def main(ApproachDataFile, AirportDataFile, NOTAM_url, TAF_url, parameters, arg0, arg1, arg2):
-    # Read parameters
-    flight = Flight(parameters, arg0, arg1, arg2)
+    def toMinimumsWithAlt(self, flight):
+        self.opsMinimums = self.airport.getToMinimums([self.time, self.time + 5 * 60])
+        self.feasibleWx = self.airport.feasibleWx([self.time, self.time + 5*60]) * self.opsMinimums.feasibleVisibility
 
+    def toMinimumsWithoutAlt(self, flight):
+        requirements = ['feasibleVisibilityOEI']
+        preferences = ['visibility']
+        self.opsMinimums = self.airport.getMinimums(requirements, preferences, [self.time,self.time + 5*60])
+        self.feasibleWx = self.airport.feasibleWx([self.time, self.time + 5*60]) * self.opsMinimums.feasibleVisibility
+
+    def destMinimums(self, flight):
+        requirements = []
+        preferences = ['feasibleVis','feasibleCloudbase', 'groundEq', 'opsMin']
+
+        self.planMinimums = self.airport.getMinimums(requirements, preferences, [self.time - 3600, self.time + 3600])
+        self.opsMinimums = self.planMinimums.plan2ops()
+        self.feasibleWx = self.airport.feasibleWx([self.time - 3600, self.time + 3600]) * self.opsMinimums.feasibleVisibility * self.planMinimums.feasibleVisibility * self.planMinimums.feasibleCloudbase
+
+    def altMinimums(self, flight, groundEq):
+        preferences = ['OpsMin', 'type']
+        requirements = ['feasibleVis']
+        if groundEq == 1:   
+            requirements.append('groundEq')
+        self.opsMinimums = self.airport.getMinimums(requirements, preferences, [self.time - 3600, self.time + 3600])
+        if self.opsMinimums.approach == '':
+            return
+
+        preferences = ['OpsMin']
+        requirements = ['feasibleVis','feasibleCloudbase']
+        opsApproachType = self.opsMinimums.approach.type
+        if opsApproachType == 'CAT1':
+            requirements.append('NPA')
+        elif opsApproachType == 'NPA':
+            requirements.append('NPA')
+            requirements.append('worseMinimums')
+
+        elif opsApproachType == 'CIRCLE':
+            requirements.append('CIRCLE')
+        self.planMinimums = self.airport.getMinimums(requirements, preferences, [self.time - 3600, self.time + 3600])
+        self.feasibleWx = self.airport.feasibleWx([self.time - 3600, self.time + 3600]) * self.opsMinimums.feasibleVisibility * self.planMinimums.feasibleVisibility * self.planMinimums.feasibleCloudbase
+
+    def toAltMinimums(self, flight):
+        preferences = ['opsMin']
+        requirements = ['feasibleVisibilityOEI', 'feasibleCloudbase', 'groundEq']
+        self.planMinimums = self.airport.getMinimums(requirements, preferences, [self.time - 3600, self.time + 3600])
+        self.opsMinimums = self.planMinimums.plan2ops()
+        self.feasibleWx = self.airport.feasibleWx([self.time - 3600, self.time + 3600]) * self.opsMinimums.feasibleVisibility * self.planMinimums.feasibleVisibility * self.planMinimums.feasibleCloudbase
+
+    def print(self, title):
+        time = datetime.fromtimestamp(self.time)
+        print('\n')
+        print(title, ': ', self.airport.name, ' ', time.hour, time.minute,'Z')
+        if self.planMinimums.approach.type == 'CAT1':
+            cloudbase = '-'
+        else:
+            cloudbase = self.planMinimums.approach.cloudbase
+        print('Plan:', self.planMinimums.approach.ID, ' ', self.planMinimums.visibility[1:], 'm /', cloudbase, 'ft')
+        print('Ops: ', self.opsMinimums.approach.ID, ' ', self.opsMinimums.visibility[1:], 'm / - ft')
+
+    def printTO(self, title):
+        print(title, ': ', self.airport.name)
+        print('Ops: ', self.opsMinimums.visibility[1:], 'm / - ft')
+
+def main(ApproachDataFile, RunwayDataFile, AirportDataFile, OprHrDataFile, TafDataFile, MetarDataFile, CivilTwilightDataFile, parameters, arg0, arg1, arg2):
     # Read airport data 
     airports = Airports(AirportDataFile)
     
+    # Read runway data
+    airports.addRunway(RunwayDataFile)
+    
     # Read approach data 
     airports.addApproach(ApproachDataFile)
-    
-    # Read NOTAM opening hours for next 24h
-    airports.readNOTAM(NOTAM_url)
 
-    # Read day and night data for next 24h
+    # Read opr hr data
+    airports.addData(OprHrDataFile)
     
     # Read TAF data
-    #airports.readAvinorData(TAF_url, 'TAF')
+    airports.addData(TafDataFile)
 
     # Read METAR data
-    #airports.readAvinorData(METAR_url, 'METAR')
+    airports.addData(MetarDataFile)
+    
+    # Read day-night data
+    airports.addData(CivilTwilightDataFile)
 
-    # Solve Takeoff alternates
-    # Calculate alternate distances and fuel requirements
-    #airports.calculateDistanceAndTime(flight)
-    # Build input 
-    #solver = Solver(airports, flight)
-    # Optimize and print solution
-    #solver.solve()
-
-    # Solve destination and alternates    
-    # Calculate alternate distances and fuel requirements
-    airports.calculateDistanceAndTime(flight)
-    # Build input 
-    solver = Solver(airports, flight)
-    # Optimize and print solution
-    solver.solve()
+    # Create flight
+    flight = Flight(airports, parameters, arg0, arg1, arg2)
+    
+    # Solve and print solution
+    flight.solve(airports)
 
 if __name__ == '__main__':
-    TAF_url = 'https://api.met.no/weatherapi/tafmetar/1.0/taf.txt?icao='
-    METAR_url = 'https://api.met.no/weatherapi/tafmetar/1.0/metar.txt?icao='
-    NOTAM_url = 'https://www.ais.fi/ais/bulletins/efinen.htm'
-    ApproachDataFile = 'ApproachData.csv'
-    AirportDataFile = 'AirportData.csv'
-    parameters = {'maxTailwind': 10, 'maxCrosswind': 20, 'minRVR': 600, 'TOALTminRVR': 800, 'OEIXCSpeed': 120, 'XCSpeed': 140}
-    AirportsInUse = 0
-    arg0 = "EFPO2330"
-    arg1 = "EFPO0045"
-    arg2 = "0230"
+    dof = date.today()
+    timestamp = datetime.now().timestamp()
 
-    main(ApproachDataFile, AirportDataFile, NOTAM_url, TAF_url, parameters, arg0, arg1, arg2)
+    ApproachDataFile = 'ApproachData.csv'
+    RunwayDataFile = 'RunwayData.csv'
+    AirportDataFile = 'AirportData.csv'
+    
+    # Scrape ats opening hours if current file is old
+    OprHrDataFile = 'OprHrData.csv'
+    time_from_edit = timestamp - os.path.getctime(OprHrDataFile)
+    if time_from_edit > 12*3600:
+        url = 'https://www.ais.fi/ais/bulletins/efinen.htm'
+        OprHrData(url, dof).createCsv(OprHrDataFile)
+
+    # Scrape TAF and METAR if current file is old
+    TafDataFile = 'TafData.csv'
+    MetarDataFile = 'MetarData.csv'
+    time_from_edit = timestamp - os.path.getctime(TafDataFile)
+    if time_from_edit > 30*60:
+        url = 'https://api.met.no/weatherapi/tafmetar/1.0/taf.txt?icao='
+        TafData(url, AirportDataFile).createCsv(TafDataFile)
+        url = 'https://api.met.no/weatherapi/tafmetar/1.0/metar.txt?icao='
+        MetarData(url, AirportDataFile).createCsv(MetarDataFile)
+
+    # Scrape day/night data if current file is old
+    CivilTwilightDataFile = 'CivilTwilightData.csv'
+    time_from_edit = timestamp - os.path.getctime(CivilTwilightDataFile)
+    if time_from_edit > 12*3600:
+        url = 'http://api.sunrise-sunset.org/json?formatted=0'
+        TwilightData(dof, url, AirportDataFile).createCsv(CivilTwilightDataFile)
+
+    # Collect parameters to dict
+    parameters = {'maxTailwind': 10, 'maxCrosswind': 20, 'minRVR': 600, 'OEIminRVR': 800, 'OEIXCSpeed': 120, 'XCSpeed': 140, 'taxiTime': 10 * 60, 'approachTime': 10 * 60, 'sidTime': 2 * 60}
+    #rules to add: ats_buffer, night_buffer, wx_buffer, toRVRcll, toRVR
+    arg0 = "EFTP2000" # 
+    arg1 = "EFTU0030" #
+    arg2 = "" #optio: varakenttä ja aika
+
+    main(ApproachDataFile, RunwayDataFile, AirportDataFile, OprHrDataFile, TafDataFile, MetarDataFile, CivilTwilightDataFile, parameters, arg0, arg1, arg2)

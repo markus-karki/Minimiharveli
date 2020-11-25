@@ -148,7 +148,9 @@ class OprHrData():
                 endTime = ctime.timestamp() + t
                 self.writeLine(AirportName, startTime, endTime)
 
+'''
 dof = date.today()
 NOTAM_url = 'https://www.ais.fi/ais/bulletins/efinen.htm'
 OprHrDataFile = 'OprHrData.csv'
 OprHrData(NOTAM_url, dof).createCsv(OprHrDataFile)
+'''
