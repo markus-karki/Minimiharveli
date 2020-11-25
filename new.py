@@ -2,6 +2,7 @@ from datetime import datetime, time, date
 from math import cos, sin, acos, pi
 from numpy import zeros, append, where, nditer
 import csv
+import os
 from lib.nightParser import *
 from lib.notamParser import *
 from lib.weatherParser import *
@@ -10,12 +11,18 @@ TODO
 - Step 1: Redesign optimization to loop-search, w48, to test
 - Step 2: Update approach data
 - Step 3: Merge to master branch
-- Step 7: Publish as flask app via AWS w49
-- Step 8: Code corrections: 
+- Step 7: Publish as flask app via AWS
+- Step 8: Code improvements: 
     - Commemts
-    - Variable and function names
+    - Variable names
+    - Function names
+    - Error handling
+    - Multiple argument passing practices
+    - Hard coded parameters
+    - Flag printing
+    - Manual ALT assigment
     - Check logic for design/performance improvements
-    - Bug fixes
+    - BECMG for FZ and TS groups
 '''
 
 class Conditions():
@@ -86,7 +93,7 @@ class WindCondition(Conditions):
                 return False
 
 class Flight():
-    def __init__(self, airports, parameters, arg0, arg1):
+    def __init__(self, airports, parameters, arg0, arg1, arg2):
         for p in parameters:
             setattr(self, p, parameters[p])
 
@@ -97,11 +104,21 @@ class Flight():
         if departureTimeValue < (currentTime.hour * 3600 + currentTime.minute * 60):
             self.departureTime = self.departureTime + 24*60*60
         
-        self.arrivalTime = self.departureTime + int(arg1[4:6]) * 3600 + int(arg1[6:8]) * 60 + self.approachtTime
+        self.arrivalTime = self.departureTime + int(arg1[4:6]) * 3600 + int(arg1[6:8]) * 60 + self.approachTime
 
         self.departureAirport = airports.getAirport(arg0[0:4])
         self.destinationAirport = airports.getAirport(arg1[0:4])
-
+        
+        if len(arg2) >= 4:
+            self.alternateAirport = airports.getAirport(arg2[0:4])
+        else:
+            self.alternateAirport = None
+        
+        if len(arg2) == 8:
+            self.alternateArrivalTime = self.arrivalTime + int(arg2[4:6]) * 3600 + int(arg2[6:8]) * 60 + self.approachTime
+        else:
+            self.alternateArrivalTime = None
+        
         self.departure = 0
         self.toAlt = 0
         self.destination = 0
@@ -239,9 +256,17 @@ class Airports():
         bestArrivalTime = flight.arrivalTime + 48*3600
         bestAlt = 0
 
-        for airport in self.airport:
+        if flight.alternateAirport is None:
+            airport_list = self.airport
+        else:
+            airport_list = (flight.alternateAirport,)
+
+        for airport in airport_list:
             if not(airport.name in noGo):
-                arrivalTime = flight.arrivalTime + airport.getFlightTime(flight, flight.destinationAirport, flight.XCSpeed)
+                if flight.alternateArrivalTime is None:
+                    arrivalTime = flight.arrivalTime + airport.getFlightTime(flight, flight.destinationAirport, flight.XCSpeed)
+                else:
+                    arrivalTime = flight.alternateArrivalTime
                 if arrivalTime < bestArrivalTime:
                     alt = Operation(airport, arrivalTime)
                     if alt.feasibleAP and alt.feasibleAts:
@@ -275,7 +300,7 @@ class Airport():
         else:
             self.distanceFromDest = 3440 * acos(sin(self.latitude)*sin(origin.latitude)+cos(self.latitude)*cos(origin.latitude)*cos(self.longitude-origin.longitude))
 
-        timeFromDest = (self.distanceFromDest / speed) * 3600 + flight.sidTime + flight.approachtTime
+        timeFromDest = (self.distanceFromDest / speed) * 3600 + flight.sidTime + flight.approachTime
         return timeFromDest
 
     def addRunway(self, row):
@@ -590,8 +615,7 @@ class Operation():
         print(title, ': ', self.airport.name)
         print('Ops: ', self.opsMinimums.visibility[1:], 'm / - ft')
 
-
-def main(ApproachDataFile, RunwayDataFile, AirportDataFile, OprHrDataFile, TafDataFile, MetarDataFile, CivilTwilightDataFile, parameters, arg0, arg1):
+def main(ApproachDataFile, RunwayDataFile, AirportDataFile, OprHrDataFile, TafDataFile, MetarDataFile, CivilTwilightDataFile, parameters, arg0, arg1, arg2):
     # Read airport data 
     airports = Airports(AirportDataFile)
     
@@ -614,42 +638,48 @@ def main(ApproachDataFile, RunwayDataFile, AirportDataFile, OprHrDataFile, TafDa
     airports.addData(CivilTwilightDataFile)
 
     # Create flight
-    flight = Flight(airports, parameters, arg0, arg1)
+    flight = Flight(airports, parameters, arg0, arg1, arg2)
     
     # Solve and print solution
     flight.solve(airports)
 
 if __name__ == '__main__':
     dof = date.today()
-    old_data = 0
+    timestamp = datetime.now().timestamp()
 
     ApproachDataFile = 'ApproachData.csv'
     RunwayDataFile = 'RunwayData.csv'
     AirportDataFile = 'AirportData.csv'
     
+    # Scrape ats opening hours if current file is old
     OprHrDataFile = 'OprHrData.csv'
-    if old_data:
+    time_from_edit = timestamp - os.path.getctime(OprHrDataFile)
+    if time_from_edit > 12*3600:
         url = 'https://www.ais.fi/ais/bulletins/efinen.htm'
         OprHrData(url, dof).createCsv(OprHrDataFile)
 
-    
+    # Scrape TAF and METAR if current file is old
     TafDataFile = 'TafData.csv'
     MetarDataFile = 'MetarData.csv'
-    if 1:
+    time_from_edit = timestamp - os.path.getctime(TafDataFile)
+    if time_from_edit > 30*60:
         url = 'https://api.met.no/weatherapi/tafmetar/1.0/taf.txt?icao='
         TafData(url, AirportDataFile).createCsv(TafDataFile)
         url = 'https://api.met.no/weatherapi/tafmetar/1.0/metar.txt?icao='
         MetarData(url, AirportDataFile).createCsv(MetarDataFile)
-    
+
+    # Scrape day/night data if current file is old
     CivilTwilightDataFile = 'CivilTwilightData.csv'
-    if old_data:
+    time_from_edit = timestamp - os.path.getctime(CivilTwilightDataFile)
+    if time_from_edit > 12*3600:
         url = 'http://api.sunrise-sunset.org/json?formatted=0'
         TwilightData(dof, url, AirportDataFile).createCsv(CivilTwilightDataFile)
 
-    parameters = {'maxTailwind': 10, 'maxCrosswind': 20, 'minRVR': 600, 'OEIminRVR': 800, 'OEIXCSpeed': 120, 'XCSpeed': 140, 'taxiTime': 10 * 60, 'approachtTime': 10 * 60, 'sidTime': 2 * 60}
+    # Collect parameters to dict
+    parameters = {'maxTailwind': 10, 'maxCrosswind': 20, 'minRVR': 600, 'OEIminRVR': 800, 'OEIXCSpeed': 120, 'XCSpeed': 140, 'taxiTime': 10 * 60, 'approachTime': 10 * 60, 'sidTime': 2 * 60}
     #rules to add: ats_buffer, night_buffer, wx_buffer, toRVRcll, toRVR
-    arg0 = "EFTP1230" # 
+    arg0 = "EFTP2000" # 
     arg1 = "EFTU0030" #
-    arg2 = "" #varakenttä / toiminta-aika
+    arg2 = "" #optio: varakenttä ja aika
 
-    main(ApproachDataFile, RunwayDataFile, AirportDataFile, OprHrDataFile, TafDataFile, MetarDataFile, CivilTwilightDataFile, parameters, arg0, arg1)
+    main(ApproachDataFile, RunwayDataFile, AirportDataFile, OprHrDataFile, TafDataFile, MetarDataFile, CivilTwilightDataFile, parameters, arg0, arg1, arg2)
