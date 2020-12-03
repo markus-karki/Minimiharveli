@@ -1,11 +1,11 @@
 from minimums import * 
 from flask import Flask, render_template, request, url_for, flash, redirect
 
-app = Flask(__name__)
-app.config['SECRET_KEY'] = 'SKNJAFI4O49RONAERVKJNAFV9J430249KMRWFVOIW'
+application = Flask(__name__)
+application.config['SECRET_KEY'] = 'SKNJAFI4O49RONAERVKJNAFV9J430249KMRWFVOIW'
 
 
-@app.route('/', methods = ['POST','GET'])
+@application.route('/', methods = ['POST','GET'])
 def index():
    
     if request.method == 'POST':
@@ -21,3 +21,6 @@ def index():
         return render_template("solution.html", text=content)
 
     return render_template('index.html')
+
+if __name__ == "__main__":
+    application.run(port=5000, debug=True)

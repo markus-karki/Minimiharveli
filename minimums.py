@@ -1,6 +1,6 @@
 from datetime import datetime, time, date
 from math import cos, sin, acos, pi
-from numpy import zeros, append, where, nditer
+#from numpy import zeros, append, where, nditer
 import csv
 import os
 from lib.nightParser import *
@@ -8,9 +8,8 @@ from lib.notamParser import *
 from lib.weatherParser import *
 '''
 TODO
-- Step 1: Redesign optimization to loop-search, w48, to test
+- Step 1: Redesign optimization to loop-search, to test
 - Step 2: Update approach data
-- Step 3: Merge to master branch
 - Step 7: Publish as flask app via AWS
 - Step 8: Code improvements: 
     - Commemts
@@ -20,7 +19,7 @@ TODO
     - Multiple argument passing practices
     - Hard coded parameters
     - Flag printing
-    - Manual ALT assigment
+    - Manual ALT assigment, done
     - Check logic for design/performance improvements
     - BECMG for FZ and TS groups
 '''
