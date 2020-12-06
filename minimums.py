@@ -8,10 +8,12 @@ from lib.notamParser import *
 from lib.weatherParser import *
 '''
 TODO
-- Step 1: Redesign optimization to loop-search, to test
-- Step 2: Update approach data
-- Step 7: Publish as flask app via AWS
+- Step 1: Redesign optimization to loop-search, test
+- Step 2: Update approach data, HIGH PRIO
 - Step 8: Code improvements: 
+    - Form input validation
+        - Riikan menetelmä
+        - Kaikki isoilla kirjaimilla
     - Commemts
     - Variable names
     - Function names
@@ -19,7 +21,6 @@ TODO
     - Multiple argument passing practices
     - Hard coded parameters
     - Flag printing
-    - Manual ALT assigment, done
     - Check logic for design/performance improvements
     - BECMG for FZ and TS groups
 '''
@@ -169,9 +170,10 @@ class Flight():
                 alt1Name = self.alt1.airport.name
             self.alt2 = airports.findAlt(self, 0, (alt1Name, destName))
             if self.alt2 == 0:
-                f.write('\nNo suitable 2nd alternate found!')
+                f.write('\n\nNo suitable 2nd alternate found!')
             else:
                 self.alt2.printf('Alternate 2', f)
+        f.close()
 
 class Airports():
     def __init__(self, AirportDataFile):
@@ -695,8 +697,8 @@ def minimums(arg0, arg1, arg2):
 
 if __name__ == '__main__':
 
-    arg0 = "EFTP2000" # 
-    arg1 = "EFTU0030" #
+    arg0 = "EFTU1200" # 
+    arg1 = "EFPO0100" #
     arg2 = "" #optio: varakenttä ja aika
 
     minimums(arg0, arg1, arg2)
