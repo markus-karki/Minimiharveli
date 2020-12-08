@@ -1,29 +1,37 @@
+# -*- coding: utf-8 -*-
+__author__ = 'Markus Kärki'
+__version__ = "1.0.0"
+
+'''
+A module for creating solution.txt file containing weather minima. Input consists on departure airport, destination airport and optional alternate airport. 4 digit time information can be added to all inputs.
+
+Updates
+    - Convert input to uppercase
+    - Ensure 4 digit time format in output
+    - Bug fixes on utc time handling and approach selection
+
+Todo
+    - Commemts
+    - Variable names
+    - Function names
+    - Error handling
+    - Separate data folder
+    - Multiple argument passing practices
+    - Hard coded parameters
+    - Check logic for design/performance improvements
+
+Known issues
+    - BECMG for FZ and TS groups
+'''
+
 from datetime import datetime, time, date
 from math import cos, sin, acos, pi
-#from numpy import zeros, append, where, nditer
 import csv
 import os
 from lib.nightParser import *
 from lib.notamParser import *
 from lib.weatherParser import *
-'''
-TODO
-- Step 1: Redesign optimization to loop-search, test
-- Step 2: Update approach data, HIGH PRIO
-- Step 8: Code improvements: 
-    - Form input validation
-        - Riikan menetelmä
-        - Kaikki isoilla kirjaimilla
-    - Commemts
-    - Variable names
-    - Function names
-    - Error handling
-    - Multiple argument passing practices
-    - Hard coded parameters
-    - Flag printing
-    - Check logic for design/performance improvements
-    - BECMG for FZ and TS groups
-'''
+
 
 class Conditions():
     def __init__(self, row):
@@ -97,20 +105,26 @@ class Flight():
         for p in parameters:
             setattr(self, p, parameters[p])
 
-        currentTime = datetime.now()
-        
-        departureTimeValue = int(arg0[4:6]) * 3600 + int(arg0[6:8]) * 60 + self.taxiTime
-        self.departureTime =  datetime(currentTime.year, currentTime.month, currentTime.day).timestamp() + departureTimeValue
-        if departureTimeValue < (currentTime.hour * 3600 + currentTime.minute * 60):
-            self.departureTime = self.departureTime + 24*60*60
-        
-        self.arrivalTime = self.departureTime + int(arg1[4:6]) * 3600 + int(arg1[6:8]) * 60 + self.approachTime
+        currentTime = datetime.utcnow()
 
-        self.departureAirport = airports.getAirport(arg0[0:4])
-        self.destinationAirport = airports.getAirport(arg1[0:4])
+        self.departureAirport = airports.getAirport(arg0[0:4].upper())
+        self.destinationAirport = airports.getAirport(arg1[0:4].upper())
+        
+        if len(arg0) == 8:
+            departureTimeValue = int(arg0[4:6]) * 3600 + int(arg0[6:8]) * 60 + self.taxiTime
+            self.departureTime =  datetime(currentTime.year, currentTime.month, currentTime.day).timestamp() + departureTimeValue
+            if departureTimeValue < (currentTime.hour * 3600 + currentTime.minute * 60):
+                self.departureTime = self.departureTime + 24*60*60
+        else:
+            self.departureTime = currentTime.timestamp() + self.taxiTime
+        
+        if len(arg1) == 8:
+            self.arrivalTime = self.departureTime + int(arg1[4:6]) * 3600 + int(arg1[6:8]) * 60 + self.approachTime
+        else:
+            self.arrivalTime = self.departureTime + self.destinationAirport.getFlightTime(self, self.departureAirport, self.XCSpeed)
         
         if len(arg2) >= 4:
-            self.alternateAirport = airports.getAirport(arg2[0:4])
+            self.alternateAirport = airports.getAirport(arg2[0:4].upper())
         else:
             self.alternateAirport = None
         
@@ -131,17 +145,14 @@ class Flight():
         
         self.departure = Operation(self.departureAirport, self.departureTime)  
         self.departure.toMinimumsWithoutAlt(self)      
-        if not(self.departure.feasibleAP):
-            f.write('\nDeparture airport not feasible!')
-        elif not(self.departure.feasibleWx):
+        
+        if not(self.departure.feasibleWx):
             self.departure.toMinimumsWithAlt(self) # 400m if CLL, 500m otherwise
-            if not(self.departure.feasibleWx):
-                f.write('\nWeather not suitable for departure!')
             self.departure.printTOf('Take-off', f)
             
             self.toAlt = airports.findToAlt(self)
             if self.toAlt == 0:
-                f.write('\nNo suitable takeoff alternate found!')
+                f.write('\n\nNo suitable takeoff alternate found!')
             else:
                 self.toAlt.printf('Take-off alternate', f)
         else:
@@ -151,8 +162,7 @@ class Flight():
         self.destination = Operation(self.destinationAirport, self.arrivalTime) 
         
         self.destination.destMinimums(self)
-        if not(self.destination.feasibleAP):
-            f.write('\nDestination airport not feasible!')
+        
         self.destination.printf('Destination', f)
         destName = self.destination.airport.name
         # ALT1
@@ -173,6 +183,21 @@ class Flight():
                 f.write('\n\nNo suitable 2nd alternate found!')
             else:
                 self.alt2.printf('Alternate 2', f)
+        # NOTES
+        f.write('\n')
+        if not(self.departure.feasibleAts):
+            f.write('\nDeparture airport not open!')
+        if not(self.departure.feasibleWx):
+            f.write('\nWeather not suitable for departure!')
+        if not(self.destination.feasibleAts):
+            f.write('\nDestination airport not open!')
+        if not(self.destination.feasibleWx):
+            f.write('\nWeather not suitable at destination!')
+        if not(self.alt1.feasibleAts):
+            f.write('\nAlternate airport not open!')
+        if not(self.alt1.feasibleWx):
+            f.write('\nWeather not suitable at alternate!')
+        
         f.close()
 
 class Airports():
@@ -271,7 +296,7 @@ class Airports():
                     arrivalTime = flight.alternateArrivalTime
                 if arrivalTime < bestArrivalTime:
                     alt = Operation(airport, arrivalTime)
-                    if alt.feasibleAP and alt.feasibleAts:
+                    if (alt.feasibleAP and alt.feasibleAts) or (len(airport_list) == 1):
                         alt.altMinimums(flight, groundEq)
                         if alt.planMinimums != 0:
                             bestAlt = alt
@@ -562,13 +587,13 @@ class Operation():
 
     def toMinimumsWithoutAlt(self, flight):
         requirements = ['feasibleVisibilityOEI']
-        preferences = ['visibility']
+        preferences = ['OpsMin']
         self.opsMinimums = self.airport.getMinimums(requirements, preferences, [self.time,self.time + 5*60])
         self.feasibleWx = self.airport.feasibleWx([self.time, self.time + 5*60]) * self.opsMinimums.feasibleVisibility
 
     def destMinimums(self, flight):
         requirements = []
-        preferences = ['feasibleVis','feasibleCloudbase', 'groundEq', 'opsMin']
+        preferences = ['feasibleVis','feasibleCloudbase', 'groundEq', 'OpsMin']
 
         self.planMinimums = self.airport.getMinimums(requirements, preferences, [self.time - 3600, self.time + 3600])
         self.opsMinimums = self.planMinimums.plan2ops()
@@ -621,7 +646,7 @@ class Operation():
 
     def printf(self, title, f):
         time = datetime.fromtimestamp(self.time)
-        f.write('\n\n'+title + ': ' + self.airport.name + ' ' + str(time.hour) + str(time.minute) +'Z')
+        f.write('\n\n'+title + ': ' + self.airport.name + ' ' + '{:02d}'.format(time.hour) + '{:02d}'.format(time.minute) +'Z')
         if self.planMinimums.approach.type == 'CAT1':
             cloudbase = ' - '
         else:
@@ -630,7 +655,8 @@ class Operation():
         f.write('\nOps: ' + self.opsMinimums.approach.ID + ' ' + str(self.opsMinimums.visibility[1:]) + 'm / - ft')
 
     def printTOf(self, title, f):
-        f.write('\n\n'+title + ': ' + self.airport.name)
+        time = datetime.fromtimestamp(self.time)
+        f.write('\n\n'+title + ': ' + self.airport.name+ ' ' + '{:02d}'.format(time.hour) + '{:02d}'.format(time.minute) +'Z')
         f.write('\nOps: ' + str(self.opsMinimums.visibility[1:]) + 'm / - ft')
 
 def minimums(arg0, arg1, arg2):
@@ -638,27 +664,27 @@ def minimums(arg0, arg1, arg2):
     timestamp = datetime.now().timestamp()
     
     # Read airport data 
-    AirportDataFile = 'AirportData.csv'
+    AirportDataFile = './data/AirportData.csv'
     airports = Airports(AirportDataFile)
     
     # Read runway data
-    RunwayDataFile = 'RunwayData.csv'
+    RunwayDataFile = './data/RunwayData.csv'
     airports.addRunway(RunwayDataFile)
     
     # Read approach data 
-    ApproachDataFile = 'ApproachData.csv'
+    ApproachDataFile = './data/ApproachData.csv'
     airports.addApproach(ApproachDataFile)
     
     # Scrape ats opening hours if current file is old
-    OprHrDataFile = 'OprHrData.csv'
+    OprHrDataFile = './data/OprHrData.csv'
     time_from_edit = timestamp - os.path.getctime(OprHrDataFile)
     if time_from_edit > 12*3600:
         url = 'https://www.ais.fi/ais/bulletins/efinen.htm'
         OprHrData(url, dof).createCsv(OprHrDataFile)
 
     # Scrape TAF and METAR if current file is old
-    TafDataFile = 'TafData.csv'
-    MetarDataFile = 'MetarData.csv'
+    TafDataFile = './data/TafData.csv'
+    MetarDataFile = './data/MetarData.csv'
     time_from_edit = timestamp - os.path.getctime(TafDataFile)
     if time_from_edit > 30*60:
         url = 'https://api.met.no/weatherapi/tafmetar/1.0/taf.txt?icao='
@@ -667,7 +693,7 @@ def minimums(arg0, arg1, arg2):
         MetarData(url, AirportDataFile).createCsv(MetarDataFile)
 
     # Scrape day/night data if current file is old
-    CivilTwilightDataFile = 'CivilTwilightData.csv'
+    CivilTwilightDataFile = './data/CivilTwilightData.csv'
     time_from_edit = timestamp - os.path.getctime(CivilTwilightDataFile)
     if time_from_edit > 12*3600:
         url = 'http://api.sunrise-sunset.org/json?formatted=0'
@@ -697,8 +723,8 @@ def minimums(arg0, arg1, arg2):
 
 if __name__ == '__main__':
 
-    arg0 = "EFTU1200" # 
-    arg1 = "EFPO0100" #
+    arg0 = "efpo" # 
+    arg1 = "eftp" #
     arg2 = "" #optio: varakenttä ja aika
 
     minimums(arg0, arg1, arg2)
