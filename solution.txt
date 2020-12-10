@@ -1,0 +1,12 @@
+
+
+Take-off: EFPO 0910Z
+Ops: 1100m / - ft
+
+Destination: EFTP 0944Z
+Plan:ILS RWY 24 600m /  - ft
+Ops: ILS RWY 24 600m / - ft
+
+Alternate 1: EFPO 1018Z
+Plan:RNP RWY 12 1400m / 343ft
+Ops: LPV RWY 12 1100m / - ft
