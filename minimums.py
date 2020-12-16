@@ -6,9 +6,7 @@ __version__ = "1.0.2"
 A module for creating solution.txt file containing weather minima. Input consists on departure airport, destination airport and optional alternate airport. 4 digit time information can be added to all inputs.
 
 Updates
-    - use preferred runway when over 5kt? tailwind
-    - 2 alternates when taf not available
-    - second alternate when 1st alternate is given
+    - Bug fix: skips now prob and prob tempo- groups
 
 Todo
     - Commemts
@@ -490,7 +488,7 @@ class Airport():
         
         for cond in getattr(self, attr): 
             # Check if condition is relevant by type
-            if cond.type == 'PROB' and cond.type == 'PROB TEMPO':
+            if cond.type == 'PROB' or cond.type == 'PROB TEMPO':
                 continue
             elif cond.type == 'TEMPO':
                 continue
@@ -759,6 +757,6 @@ if __name__ == '__main__':
 
     arg0 = "efpo" # 
     arg1 = "efou" #
-    arg2 = "efku" #optio: varakenttä ja aika
+    arg2 = "efjy" #optio: varakenttä ja aika
 
     minimums(arg0, arg1, arg2)
