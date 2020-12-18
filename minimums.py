@@ -1,26 +1,24 @@
 # -*- coding: utf-8 -*-
 __author__ = 'Markus Kärki'
-__version__ = "1.0.1"
+__version__ = "1.0.2"
 
 '''
 A module for creating solution.txt file containing weather minima. Input consists on departure airport, destination airport and optional alternate airport. 4 digit time information can be added to all inputs.
 
 Updates
-    - use preferred runway when over 5kt? tailwind
-    - 2 alternates when taf not available
-    - second alternate when 1st alternate is given
+    - Bug fix: skips now prob and prob tempo- groups
 
 Todo
-    - Commemts
+    - Comments
     - Variable names
     - Function names
     - Error handling
-    - Separate data folder
-    - Multiple argument passing practices
     - Hard coded parameters
     - Check logic for design/performance improvements
 
 Known issues
+    - Tempo group -> operation.oneHourHolding = True/False, print('One hour additional fuel required!')
+    - Requirements -> Top priority preferences, Alt minimums always given!
     - BECMG for FZ and TS groups
 '''
 
@@ -28,6 +26,7 @@ from datetime import datetime, time, date
 from math import cos, sin, acos, pi
 import csv
 import os
+import parameters
 from lib.nightParser import *
 from lib.notamParser import *
 from lib.weatherParser import *
@@ -185,9 +184,9 @@ class Flight():
         self.alt1 = airports.findAlt(self, not(self.destination.opsMinimums.approach.groundEquipment),airport_list, (destName,))
         if self.alt1 == 0:
             f.write('\n\nNo suitable alternate found!')
-        else:
+        elif self.alt1.feasibleApproach:
             self.alt1.printf('Alternate 1', f)
-        
+
         # ALT2
         if not(self.destination.feasibleApproach) or not(self.destination.tafAvailable):
             if self.alt1 == 0:
@@ -315,7 +314,7 @@ class Airports():
                     alt = Operation(airport, arrivalTime)
                     if (alt.feasibleAP and alt.feasibleAts) or (len(airport_list) == 1):
                         alt.altMinimums(flight, groundEq)
-                        if alt.planMinimums != 0:
+                        if alt.feasibleApproach or len(airport_list)==1:
                             bestAlt = alt
                             bestArrivalTime = arrivalTime
 
@@ -484,12 +483,12 @@ class Airport():
         minimums.setFeasibleCloudbase(value)
 
     def feasibleCondition(self, attr, limit, times):    
-        if len(getattr(self, attr)) <= 1 and attr != 'wx':
+        if len(getattr(self, attr)) < 1 and attr != 'wx':
             return 0
         
         for cond in getattr(self, attr): 
             # Check if condition is relevant by type
-            if cond.type == 'PROB' and cond.type == 'PROB TEMPO':
+            if cond.type == 'PROB' or cond.type == 'PROB TEMPO':
                 continue
             elif cond.type == 'TEMPO':
                 continue
@@ -517,11 +516,11 @@ class Airport():
         return self.feasibleCondition('wx', False, times) 
     
     def feasibleWind(self, runway, times):
-        limit = (10, 20, runway.heading)
+        limit = (parameters.wind['maxTailwind'], parameters.wind['maxCrosswind'], runway.heading)
         return self.feasibleCondition('wind', limit, times) 
     
     def preferedWind(self, runway, times):
-        limit = (5, 20, runway.heading)
+        limit = (parameters.wind['preferedWind'], parameters.wind['maxCrosswind'], runway.heading)
         return self.feasibleCondition('wind', limit, times) 
     
     def isDay(self, times):
@@ -604,7 +603,13 @@ class Minimums():
 
     def setFeasibleCloudbase(self, value):
         self.feasibleCloudbase = value
-
+    
+    def getApproachType(self):
+        if isinstance(self.approach, Approach):
+            return self.approach.type
+        else:
+            return None
+               
 class Operation():
     def __init__(self, airport, time):
         self.airport = airport
@@ -642,7 +647,7 @@ class Operation():
         self.feasibleWx = self.airport.feasibleWx([self.time - 3600, self.time + 3600])
 
     def altMinimums(self, flight, groundEq):
-        preferences = ['OpsMin', 'type']
+        preferences = ['OpsMin', 'Type']
         requirements = ['feasibleVis']
         if groundEq == 1:   
             requirements.append('groundEq')
@@ -653,6 +658,8 @@ class Operation():
         preferences = ['OpsMin']
         requirements = ['feasibleVis','feasibleCloudbase']
         opsApproachType = self.opsMinimums.approach.type
+        if groundEq == 1:   
+            requirements.append('groundEq')
         if opsApproachType == 'CAT1':
             requirements.append('NPA')
         elif opsApproachType == 'NPA':
@@ -673,28 +680,13 @@ class Operation():
         self.feasibleApproach = self.opsMinimums.feasibleVisibility * self.planMinimums.feasibleVisibility * self.planMinimums.feasibleCloudbase
         self.feasibleWx = self.airport.feasibleWx([self.time - 3600, self.time + 3600])
 
-    def print(self, title):
-        time = datetime.fromtimestamp(self.time)
-        print('\n')
-        print(title, ': ', self.airport.name, ' ', time.hour, time.minute,'Z')
-        if self.planMinimums.approach.type == 'CAT1':
-            cloudbase = ' - '
-        else:
-            cloudbase = self.planMinimums.approach.cloudbase
-        print('Plan:', self.planMinimums.approach.ID, ' ', self.planMinimums.visibility[1:], 'm /', cloudbase, 'ft')
-        print('Ops: ', self.opsMinimums.approach.ID, ' ', self.opsMinimums.visibility[1:], 'm / - ft')
-
-    def printTO(self, title):
-        print(title, ': ', self.airport.name)
-        print('Ops: ', self.opsMinimums.visibility[1:], 'm / - ft')
-
     def printf(self, title, f):
         time = datetime.fromtimestamp(self.time)
         f.write('\n\n'+title + ': ' + self.airport.name + ' ' + '{:02d}'.format(time.hour) + '{:02d}'.format(time.minute) +'Z')
-        if self.planMinimums.approach.type == 'CAT1':
+        if self.planMinimums.getApproachType() == 'CAT1':
             cloudbase = ' - '
         else:
-            cloudbase = self.planMinimums.approach.cloudbase
+            cloudbase = str(self.planMinimums.cloudbase)
         f.write('\nPlan:' + self.planMinimums.approach.ID + ' ' + str(self.planMinimums.visibility[1:]) + 'm / ' + cloudbase + 'ft')
         f.write('\nOps: ' + self.opsMinimums.approach.ID + ' ' + str(self.opsMinimums.visibility[1:]) + 'm / - ft')
 
@@ -708,44 +700,40 @@ def minimums(arg0, arg1, arg2):
     timestamp = datetime.now().timestamp()
     
     # Read airport data 
-    AirportDataFile = './data/AirportData.csv'
+    AirportDataFile = parameters.data['AirportDataFile']
     airports = Airports(AirportDataFile)
     
     # Read runway data
-    RunwayDataFile = './data/RunwayData.csv'
+    RunwayDataFile = parameters.data['RunwayDataFile']
     airports.addRunway(RunwayDataFile)
     
     # Read approach data 
-    ApproachDataFile = './data/ApproachData.csv'
+    ApproachDataFile = parameters.data['ApproachDataFile']
     airports.addApproach(ApproachDataFile)
     
     # Scrape ats opening hours if current file is old
-    OprHrDataFile = './data/OprHrData.csv'
-    time_from_edit = timestamp - os.path.getctime(OprHrDataFile)
-    if time_from_edit > 12*3600:
-        url = 'https://www.ais.fi/ais/bulletins/efinen.htm'
+    OprHrDataFile = parameters.data['OprHrDataFile']
+    time_from_edit = timestamp - os.path.getmtime(OprHrDataFile)
+    if time_from_edit > parameters.data['notam_update']:
+        url = parameters.data['url_notam']
         OprHrData(url, dof).createCsv(OprHrDataFile)
 
     # Scrape TAF and METAR if current file is old
-    TafDataFile = './data/TafData.csv'
-    MetarDataFile = './data/MetarData.csv'
-    time_from_edit = timestamp - os.path.getctime(TafDataFile)
-    if time_from_edit > 10*60:
-        url = 'https://api.met.no/weatherapi/tafmetar/1.0/taf.txt?icao='
+    TafDataFile = parameters.data['TafDataFile']
+    MetarDataFile = parameters.data['MetarDataFile']
+    time_from_edit = timestamp - os.path.getmtime(TafDataFile)
+    if time_from_edit > parameters.data['weather_update']:
+        url = parameters.data['url_taf']
         TafData(url, AirportDataFile).createCsv(TafDataFile)
-        url = 'https://api.met.no/weatherapi/tafmetar/1.0/metar.txt?icao='
+        url = parameters.data['url_metar']
         MetarData(url, AirportDataFile).createCsv(MetarDataFile)
 
     # Scrape day/night data if current file is old
-    CivilTwilightDataFile = './data/CivilTwilightData.csv'
-    time_from_edit = timestamp - os.path.getctime(CivilTwilightDataFile)
-    if time_from_edit > 12*3600:
-        url = 'http://api.sunrise-sunset.org/json?formatted=0'
+    CivilTwilightDataFile = parameters.data['CivilTwilightDataFile']
+    time_from_edit = timestamp - os.path.getmtime(CivilTwilightDataFile)
+    if time_from_edit > parameters.data['day_update']:
+        url = parameters.data['url_day']
         TwilightData(dof, url, AirportDataFile).createCsv(CivilTwilightDataFile)
-
-    # Collect parameters to dictionary
-    parameters = {'maxTailwind': 10, 'maxCrosswind': 20, 'minRVR': 600, 'OEIminRVR': 800, 'OEIXCSpeed': 120, 'XCSpeed': 140, 'taxiTime': 10 * 60, 'approachTime': 10 * 60, 'sidTime': 2 * 60}
-    #rules to add: ats_buffer, night_buffer, wx_buffer, toRVRcll, toRVR
 
     # Read opr hr data
     airports.addData(OprHrDataFile)
@@ -760,7 +748,7 @@ def minimums(arg0, arg1, arg2):
     airports.addData(CivilTwilightDataFile)
 
     # Create flight
-    flight = Flight(airports, parameters, arg0, arg1, arg2)
+    flight = Flight(airports, parameters.flight, arg0, arg1, arg2)
     
     # Solve and print solution
     flight.solve(airports)
@@ -768,7 +756,7 @@ def minimums(arg0, arg1, arg2):
 if __name__ == '__main__':
 
     arg0 = "efpo" # 
-    arg1 = "eftp" #
-    arg2 = "efpo" #optio: varakenttä ja aika
+    arg1 = "efma" #
+    arg2 = "eftp" #optio: varakenttä ja aika
 
     minimums(arg0, arg1, arg2)
