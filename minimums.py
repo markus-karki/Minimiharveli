@@ -9,16 +9,16 @@ Updates
     - Bug fix: skips now prob and prob tempo- groups
 
 Todo
-    - Commemts
+    - Comments
     - Variable names
     - Function names
     - Error handling
-    - Separate data folder
-    - Multiple argument passing practices
     - Hard coded parameters
     - Check logic for design/performance improvements
 
 Known issues
+    - Tempo group -> operation.oneHourHolding = True/False, print('One hour additional fuel required!')
+    - Requirements -> Top priority preferences, Alt minimums always given!
     - BECMG for FZ and TS groups
 '''
 
@@ -314,7 +314,7 @@ class Airports():
                     alt = Operation(airport, arrivalTime)
                     if (alt.feasibleAP and alt.feasibleAts) or (len(airport_list) == 1):
                         alt.altMinimums(flight, groundEq)
-                        if alt.feasibleApproach:
+                        if alt.feasibleApproach or len(airport_list)==1:
                             bestAlt = alt
                             bestArrivalTime = arrivalTime
 
@@ -756,7 +756,7 @@ def minimums(arg0, arg1, arg2):
 if __name__ == '__main__':
 
     arg0 = "efpo" # 
-    arg1 = "efou" #
-    arg2 = "efjy" #optio: varakenttä ja aika
+    arg1 = "efma" #
+    arg2 = "eftp" #optio: varakenttä ja aika
 
     minimums(arg0, arg1, arg2)
