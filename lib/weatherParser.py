@@ -129,10 +129,11 @@ class MetarData(WeatherData):
             elif 'TS' in group:
                 self.writeLine(airport, startTime, endTime, groupType, 'TS', 'True')
             elif group[0] == 'R' and ('/' in group):
-                self.writeLine(airport, startTime, endTime, groupType, 'RVR', group[1:])
+                pass
+                #self.writeLine(airport, startTime, endTime, groupType, 'RVR', group[1:])
             elif len(group) == 7 and group[-1] == 'Z':
                     startTime = datetime(year, month, int(group[0:2])).timestamp() + int(group[2:4]) * 3600 + int(group[4:6]) * 60 - 3600
-                    endTime = startTime + 5400
+                    endTime = startTime + 3600
 
 '''
 dof = date.today()
